@@ -1,100 +1,86 @@
-# vinext-starter
+# Permit
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+Permit is a free, no-account web access gateway for operator-registered public resources. The user-facing product is deliberately small: enter one HTTP or HTTPS address and visit it. There is no login, registration form, or authorization checkbox.
 
-## Prerequisites
+The gateway is deliberately not an anonymous open proxy. A submitted address must exactly match a public resource registered by the operator. Unknown origins, wrong ports, IP literals, private or metadata addresses, cross-origin redirects, `CONNECT`, and `TRACE` fail closed.
 
-- Node.js `>=22.13.0`
+## Local demo
 
-## Quick Start
+Prerequisites:
 
-```bash
-npm install
-npm run dev
-npm run build
+- Docker Desktop with Compose
+- PowerShell 7 for the Windows E2E script
+
+Start the complete demo:
+
+```powershell
+docker compose up --build -d
 ```
 
-This starter does not use `wrangler.jsonc`.
+Open [http://localhost:3000](http://localhost:3000) and enter:
 
-## Included Shape
-
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```text
+http://demo-target:9000
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+That exact origin is registered only when `PERMIT_DEMO_MODE=true`. It is reachable through the gateway even though the target container is not published to the host. Other destinations remain denied.
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+Run the end-to-end acceptance test:
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+```powershell
+.\tests\e2e-demo.ps1
+```
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+Stop the demo:
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+```powershell
+docker compose down
+```
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+## Validation
 
-## Useful Commands
+Web build and tests:
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+```powershell
+npm test
+npx eslint app tests
+```
 
-## Learn More
+Go gateway tests without a host Go installation:
 
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+```powershell
+docker run --rm -v "${PWD}/gateway:/src" -w /src golang:1.23-alpine go test ./...
+docker run --rm -v "${PWD}/gateway:/src" -w /src golang:1.23-alpine go vet ./...
+```
+
+Portable Swift core tests without a host Swift installation:
+
+```powershell
+docker run --rm -v "${PWD}/macos:/workspace" -w /workspace swift:5.10-jammy swift test --parallel
+```
+
+Apple-specific SwiftUI, Security.framework, Network.framework, signing, and entitlement paths still require Xcode 15.3+ on macOS.
+
+## Repository map
+
+- `app/`: single-input English web interface and same-origin access-check BFF.
+- `gateway/`: Go control endpoint, one-time launch, resource session, HTTP(S)/WebSocket data plane, SSRF policy, audit, and limits.
+- `macos/`: SwiftUI/SwiftPM client foundation and portable policy tests.
+- `demo-target/`: deterministic internal fixture registered only by demo mode.
+- `compose.yaml`: complete local demo topology.
+- `tests/e2e-demo.ps1`: acceptance flow and denial checks.
+- `docs/`: product, threat-model, gateway, and macOS planning documents.
+- `PROGRESS.md`: durable goal checkpoints and evidence.
+
+## Production boundary
+
+Demo mode is not a production configuration. Before public deployment:
+
+- turn off `PERMIT_DEMO_MODE`;
+- use a random secret from a secrets manager;
+- register only verified public origins through `PERMIT_PUBLIC_RESOURCES_JSON` or a durable control plane;
+- terminate TLS at the public web and gateway origins;
+- keep private resources behind an owner-operated outbound connector rather than relaxing SSRF rules;
+- add durable distributed rate limits, storage, revocation, abuse handling, monitoring, and security review.
+
+See [gateway/README.md](gateway/README.md) and [macos/README.md](macos/README.md) for component details.

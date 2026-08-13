@@ -38,6 +38,8 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+.build/
+macos/.build/
 .dev.pid
 dev.log
 dev.err.log

@@ -1,0 +1,72 @@
+name: permit-mvp
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      CONTROL_API_URL: http://gateway:8081
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3000/"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  gateway:
+    build:
+      context: gateway
+      dockerfile: Dockerfile
+    environment:
+      PERMIT_DEMO_MODE: "true"
+      PERMIT_DEMO_TARGET_ORIGIN: http://demo-target:9000
+      PERMIT_LISTEN_ADDR: :8081
+      PERMIT_PUBLIC_BASE_URL: http://localhost:8081
+      PERMIT_SESSION_SECRET: local-demo-secret-change-before-use-123456789
+    ports:
+      - "8081:8081"
+    depends_on:
+      demo-target:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8081/healthz"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  demo-target:
+    build:
+      context: demo-target
+      dockerfile: Dockerfile
+    expose:
+      - "9000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9000/health"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  default:
+    name: permit-demo-internal

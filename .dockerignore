@@ -1,0 +1,12 @@
+.git
+.next
+.vinext
+.wrangler
+dist
+node_modules
+outputs
+work
+macos/.build
+dev.log
+dev.err.log
+.dev.pid

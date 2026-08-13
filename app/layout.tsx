@@ -14,22 +14,22 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://permit.example"),
-  title: "Permit — Authorized access, open to everyone",
+  title: "Permit — Open a registered public resource",
   description:
-    "Open websites and services you own or are authorized to use through a simple, secure access gateway.",
+    "Open public web resources that have been pre-registered with Permit.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
   },
   openGraph: {
-    title: "Permit — One address. Your authorized network.",
-    description: "Free, secure access to resources you own or are allowed to use.",
+    title: "Permit — Open a registered public resource",
+    description: "Open public web resources that have been pre-registered with Permit.",
     images: ["/og.png"],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Permit — One address. Your authorized network.",
-    description: "Free, secure access to resources you own or are allowed to use.",
+    title: "Permit — Open a registered public resource",
+    description: "Open public web resources that have been pre-registered with Permit.",
     images: ["/og.png"],
   },
 };
