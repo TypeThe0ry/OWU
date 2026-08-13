@@ -1,0 +1,27 @@
+[Unit]
+Description=Open Website Unblocker web app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www
+Group=www
+WorkingDirectory=/www/wwwroot/owu/current
+Environment=NODE_ENV=production
+Environment=WRANGLER_LOG_PATH=/tmp/owu-wrangler.log
+Environment=PATH=/usr/local/lib/owu-node:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/usr/local/lib/owu-node/node node_modules/vinext/dist/cli.js start --hostname 127.0.0.1 --port 3210
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

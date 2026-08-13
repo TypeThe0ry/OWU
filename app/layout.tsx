@@ -13,26 +13,28 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://permit.example"),
-  title: "Permit — Open a registered public resource",
+  metadataBase: new URL("http://8.219.11.175"),
+  title: "OWU — Open Website Unblocker",
   description:
-    "Open public web resources that have been pre-registered with Permit.",
+    "Enter any HTTP or HTTPS address and open it directly in your browser.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
   },
   openGraph: {
-    title: "Permit — Open a registered public resource",
-    description: "Open public web resources that have been pre-registered with Permit.",
+    title: "OWU — Open Website Unblocker",
+    description: "Open the web. One address away.",
     images: ["/og.png"],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Permit — Open a registered public resource",
-    description: "Open public web resources that have been pre-registered with Permit.",
+    title: "OWU — Open Website Unblocker",
+    description: "Open the web. One address away.",
     images: ["/og.png"],
   },
 };
+
+const themeInitScript = `try{const saved=localStorage.getItem("owu-theme");const theme=saved==="light"||saved==="dark"?saved:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=theme}catch{}`;
 
 export default function RootLayout({
   children,
@@ -40,7 +42,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

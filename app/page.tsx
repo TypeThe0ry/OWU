@@ -1,138 +1,145 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { checkAccess, normalizeInputUrl, safeLaunchUrl } from "./access-check.mjs";
+import { FormEvent, useState } from "react";
 
-const VALIDATION_MESSAGES: Record<string, string> = {
-  empty: "Enter a website address.",
-  invalid: "Enter a valid address, such as https://example.com:8443.",
-  unsupported_scheme: "Permit supports HTTP and HTTPS websites only.",
-  embedded_credentials: "Remove the username or password from the address and try again.",
-};
+function normalizeWebsite(value: string): { url?: string; error?: string } {
+  const candidate = value.trim();
+  if (!candidate) return { error: "Enter a website address." };
 
-const DECISION_MESSAGES: Record<string, string> = {
-  resource_not_authorized: "This resource has not been approved for public access.",
-  blocked: "This destination can’t be opened through Permit.",
-  port_not_allowed: "This port isn’t approved for this resource.",
-  rate_limited: "Too many attempts. Wait a moment, then try again.",
-  service_error: "Permit couldn’t open this resource right now. Try again later.",
-};
+  const normalized = /^[a-z][a-z\d+.-]*:\/\//i.test(candidate)
+    ? candidate
+    : `https://${candidate}`;
 
-type Phase = "idle" | "checking" | "opening";
+  try {
+    const url = new URL(normalized);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return { error: "OWU opens HTTP and HTTPS websites only." };
+    }
+    if (!url.hostname) return { error: "Enter a valid website address." };
+    if (url.username || url.password) {
+      return { error: "Remove the username or password from the address." };
+    }
+    return { url: url.href };
+  } catch {
+    return { error: "Enter a valid address, such as https://example.com." };
+  }
+}
 
 export default function Home() {
   const [target, setTarget] = useState("");
   const [message, setMessage] = useState("");
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [retryAfter, setRetryAfter] = useState(0);
-  const messageRef = useRef<HTMLParagraphElement>(null);
-  const normalized = useMemo(() => normalizeInputUrl(target), [target]);
-  const busy = phase !== "idle";
 
-  useEffect(() => {
-    if (retryAfter <= 0) return;
-    const timer = window.setTimeout(() => {
-      setRetryAfter((seconds) => Math.max(0, seconds - 1));
-    }, 1000);
-    return () => window.clearTimeout(timer);
-  }, [retryAfter]);
-
-  function showError(nextMessage: string) {
-    setMessage(nextMessage);
-    window.requestAnimationFrame(() => messageRef.current?.focus());
+  function toggleTheme() {
+    const current = document.documentElement.dataset.theme
+      ?? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    const next = current === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    window.localStorage.setItem("owu-theme", next);
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy || retryAfter > 0) return;
-
-    if (!normalized.ok) {
-      showError(VALIDATION_MESSAGES[normalized.reason] ?? VALIDATION_MESSAGES.invalid);
+    const result = normalizeWebsite(target);
+    if (!result.url) {
+      setMessage(result.error ?? "Enter a valid website address.");
       return;
     }
 
-    setPhase("checking");
-    setMessage("Checking whether this resource is available…");
-    const result = await checkAccess({ inputUrl: normalized.inputUrl });
-
-    if (result.decision === "allowed") {
-      const launchUrl = safeLaunchUrl(result.launchUrl, window.location.origin);
-      if (launchUrl) {
-        setPhase("opening");
-        setMessage("Resource approved. Opening securely…");
-        window.location.assign(launchUrl);
-        return;
-      }
-      setPhase("idle");
-      showError(DECISION_MESSAGES.service_error);
-      return;
-    }
-
-    setPhase("idle");
-    if (result.decision === "rate_limited") {
-      setRetryAfter(result.retryAfterSeconds ?? 30);
-    }
-    showError(DECISION_MESSAGES[result.decision] ?? DECISION_MESSAGES.service_error);
+    setMessage("Opening website…");
+    window.location.assign(result.url);
   }
 
   return (
-    <main className="permit-shell">
-      <section className="permit-card" aria-labelledby="page-title">
-        <div className="brand" aria-label="Permit">
-          <span className="brand-mark" aria-hidden="true">P</span>
-          <span>Permit</span>
+    <main className="owu-shell">
+      <div className="ambient ambient-one" aria-hidden="true" />
+      <div className="ambient ambient-two" aria-hidden="true" />
+      <div className="ambient ambient-three" aria-hidden="true" />
+
+      <header className="topbar">
+        <div className="wordmark" aria-label="Open Website Unblocker">
+          <span className="wordmark-icon" aria-hidden="true">
+            <i />
+          </span>
+          <span className="wordmark-copy">
+            <strong>OWU</strong>
+            <small>Open Website Unblocker</small>
+          </span>
         </div>
 
-        <div className="intro">
-          <p className="eyebrow">AUTHORIZED WEB ACCESS</p>
-          <h1 id="page-title">Open a public resource.</h1>
-          <p>Enter the address of a resource that has been registered with Permit.</p>
-        </div>
+        <button
+          className="theme-toggle"
+          type="button"
+          onClick={toggleTheme}
+          aria-label="Toggle color theme"
+        >
+          <span className="theme-track" aria-hidden="true">
+            <span className="theme-thumb">
+              <span className="theme-icon-light">☀</span>
+              <span className="theme-icon-dark">☾</span>
+            </span>
+          </span>
+          <span className="theme-label" aria-hidden="true">
+            <span className="theme-label-light">Light</span>
+            <span className="theme-label-dark">Dark</span>
+          </span>
+        </button>
+      </header>
 
-        <form className="access-form" onSubmit={handleSubmit} noValidate>
-          <label htmlFor="target-url">Website address</label>
-          <div className="input-row">
+      <section className="hero" aria-labelledby="page-title">
+        <div className="hero-badge"><span /> Web address launcher</div>
+        <h1 id="page-title">
+          Open the web.
+          <span>One address away.</span>
+        </h1>
+        <p className="hero-copy">
+          Enter any HTTP or HTTPS address. OWU opens it directly in your browser—no account and no setup.
+        </p>
+
+        <form className="glass-search" onSubmit={handleSubmit} noValidate>
+          <label htmlFor="website-url">Website address</label>
+          <div className="search-row">
+            <span className="search-icon" aria-hidden="true">⌕</span>
             <input
-              id="target-url"
-              inputMode="url"
+              id="website-url"
               type="text"
+              inputMode="url"
+              autoComplete="url"
+              autoCapitalize="none"
+              spellCheck={false}
               maxLength={2048}
               value={target}
               onChange={(event) => {
                 setTarget(event.target.value);
                 setMessage("");
               }}
-              placeholder="https://service.example.com:8443"
-              aria-describedby="address-help form-message"
-              aria-invalid={Boolean(message && phase === "idle")}
-              autoComplete="url"
-              disabled={busy}
+              placeholder="example.com"
+              aria-describedby="form-message direct-note"
+              aria-invalid={Boolean(message && message !== "Opening website…")}
             />
-            <button type="submit" disabled={busy || retryAfter > 0}>
-              {phase === "checking"
-                ? "Checking…"
-                : phase === "opening"
-                  ? "Opening…"
-                  : retryAfter > 0
-                    ? `Try again in ${retryAfter}s`
-                    : "Visit website"}
+            <button type="submit">
+              <span>Open website</span>
+              <i aria-hidden="true">↗</i>
             </button>
           </div>
-          <p id="address-help" className="helper">HTTP and HTTPS addresses only. Custom ports are supported.</p>
           <p
-            ref={messageRef}
             id="form-message"
-            className={message && phase === "idle" ? "status status-error" : "status"}
+            className={message && message !== "Opening website…" ? "form-message error" : "form-message"}
             aria-live="polite"
-            aria-busy={busy}
-            tabIndex={-1}
           >
             {message}
           </p>
         </form>
 
-        <p className="boundary-note">Only pre-registered public resources can be opened. Permit is not an open proxy.</p>
+        <p className="direct-note" id="direct-note">
+          <span aria-hidden="true">◇</span>
+          Direct browser navigation. OWU does not relay traffic or bypass network controls.
+        </p>
       </section>
+
+      <footer>
+        <span>OWU</span>
+        <span>Simple by design.</span>
+      </footer>
     </main>
   );
 }

@@ -1,86 +1,46 @@
-# Permit
+# Open Website Unblocker (OWU)
 
-Permit is a free, no-account web access gateway for operator-registered public resources. The user-facing product is deliberately small: enter one HTTP or HTTPS address and visit it. There is no login, registration form, or authorization checkbox.
+OWU is a free, no-account website address launcher. The public page stays focused on one action: enter an HTTP or HTTPS address and open it directly in the browser.
 
-The gateway is deliberately not an anonymous open proxy. A submitted address must exactly match a public resource registered by the operator. Unknown origins, wrong ports, IP literals, private or metadata addresses, cross-origin redirects, `CONNECT`, and `TRACE` fail closed.
+OWU does not relay page traffic, rewrite third-party websites, operate a VPN, or bypass a network policy. A destination can still be unavailable because of DNS, the current network, regional restrictions, organizational policy, or the destination itself.
 
-## Local demo
+## Product
 
-Prerequisites:
+- One English URL field and one primary action.
+- Adds `https://` when the scheme is omitted.
+- Accepts only `http:` and `https:` destinations and rejects embedded credentials.
+- No login, registration, authorization catalog, history sync, or analytics.
+- Responsive liquid-glass presentation with explicit light and dark themes.
+- Direct browser navigation; submitted addresses are not sent to an OWU API.
 
-- Docker Desktop with Compose
-- PowerShell 7 for the Windows E2E script
-
-Start the complete demo:
-
-```powershell
-docker compose up --build -d
-```
-
-Open [http://localhost:3000](http://localhost:3000) and enter:
-
-```text
-http://demo-target:9000
-```
-
-That exact origin is registered only when `PERMIT_DEMO_MODE=true`. It is reachable through the gateway even though the target container is not published to the host. Other destinations remain denied.
-
-Run the end-to-end acceptance test:
+## Local development
 
 ```powershell
-.\tests\e2e-demo.ps1
+npm install
+npm run dev
 ```
 
-Stop the demo:
-
-```powershell
-docker compose down
-```
+Open [http://localhost:3000](http://localhost:3000).
 
 ## Validation
-
-Web build and tests:
 
 ```powershell
 npm test
 npx eslint app tests
+git diff --check
 ```
 
-Go gateway tests without a host Go installation:
+`npm test` builds the production bundle and runs the focused UI, URL-policy, and theme tests.
 
-```powershell
-docker run --rm -v "${PWD}/gateway:/src" -w /src golang:1.23-alpine go test ./...
-docker run --rm -v "${PWD}/gateway:/src" -w /src golang:1.23-alpine go vet ./...
-```
+## Production deployment
 
-Portable Swift core tests without a host Swift installation:
+The checked-in deployment templates run the Vinext server on `127.0.0.1:3210` behind Nginx:
 
-```powershell
-docker run --rm -v "${PWD}/macos:/workspace" -w /workspace swift:5.10-jammy swift test --parallel
-```
+- `deploy/owu.service`: hardened systemd unit.
+- `deploy/nginx-owu.conf`: IP-host Nginx virtual host.
 
-Apple-specific SwiftUI, Security.framework, Network.framework, signing, and entitlement paths still require Xcode 15.3+ on macOS.
+The deployed app contains no proxy or access-check endpoint. The older `gateway/`, `compose.yaml`, and `demo-target/` directories are retained as historical authorized-gateway prototypes and are not part of the OWU production deployment.
 
-## Repository map
+## macOS app
 
-- `app/`: single-input English web interface and same-origin access-check BFF.
-- `gateway/`: Go control endpoint, one-time launch, resource session, HTTP(S)/WebSocket data plane, SSRF policy, audit, and limits.
-- `macos/`: SwiftUI/SwiftPM client foundation and portable policy tests.
-- `demo-target/`: deterministic internal fixture registered only by demo mode.
-- `compose.yaml`: complete local demo topology.
-- `tests/e2e-demo.ps1`: acceptance flow and denial checks.
-- `docs/`: product, threat-model, gateway, and macOS planning documents.
-- `PROGRESS.md`: durable goal checkpoints and evidence.
-
-## Production boundary
-
-Demo mode is not a production configuration. Before public deployment:
-
-- turn off `PERMIT_DEMO_MODE`;
-- use a random secret from a secrets manager;
-- register only verified public origins through `PERMIT_PUBLIC_RESOURCES_JSON` or a durable control plane;
-- terminate TLS at the public web and gateway origins;
-- keep private resources behind an owner-operated outbound connector rather than relaxing SSRF rules;
-- add durable distributed rate limits, storage, revocation, abuse handling, monitoring, and security review.
-
-See [gateway/README.md](gateway/README.md) and [macos/README.md](macos/README.md) for component details.
+The current macOS direction is a lightweight SwiftUI address launcher with an embedded `WKWebView`, direct WebKit networking, local preferences, and no account or tunnel. See [docs/owu-macos-app-plan.md](docs/owu-macos-app-plan.md).
