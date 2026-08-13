@@ -1,17 +1,18 @@
 # Open Website Unblocker (OWU)
 
-OWU is a free, no-account website address launcher. The public page stays focused on one action: enter an HTTP or HTTPS address and open it directly in the browser.
+OWU is a browser-password protected personal web proxy. The page stays focused on one action: enter an HTTP or HTTPS address and load it through the OWU server.
 
-OWU does not relay page traffic, rewrite third-party websites, operate a VPN, or bypass a network policy. A destination can still be unavailable because of DNS, the current network, regional restrictions, organizational policy, or the destination itself.
+OWU rewrites common HTML, CSS, navigation, form, redirect, fetch, XHR, EventSource, and WebSocket references so browsing remains on the OWU origin. It is not a VPN and does not guarantee compatibility with strict CSP, OAuth, CAPTCHA, DRM, Service Worker, or complex browser-origin assumptions.
 
 ## Product
 
 - One English URL field and one primary action.
 - Adds `https://` when the scheme is omitted.
-- Accepts only `http:` and `https:` destinations and rejects embedded credentials.
-- No login, registration, authorization catalog, history sync, or analytics.
+- Accepts `http:` and `https:` destinations, including explicit ports.
 - Responsive liquid-glass presentation with explicit light and dark themes.
-- Direct browser navigation; submitted addresses are not sent to an OWU API.
+- Nginx Basic Auth protects the entire public entry before the app loads.
+- The proxy dials only public Internet addresses and pins the checked DNS result for each connection.
+- Target cookies are isolated by upstream origin, and OWU credentials are never forwarded upstream.
 
 ## Local development
 
@@ -20,27 +21,27 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+The web UI runs on port `3000`. Build the Go proxy with `go build ./cmd/owu-proxy` from `gateway/`, then run it on `127.0.0.1:3211`. Production Nginx routes `/browse/` and `/socket/` to the proxy.
 
 ## Validation
 
 ```powershell
 npm test
 npx eslint app tests
+docker run --rm -v "${PWD}/gateway:/src" -w /src golang:1.23-alpine go test ./...
 git diff --check
 ```
 
-`npm test` builds the production bundle and runs the focused UI, URL-policy, and theme tests.
-
 ## Production deployment
 
-The checked-in deployment templates run the Vinext server on `127.0.0.1:3210` behind Nginx:
+The checked-in deployment templates run Vinext on `127.0.0.1:3210` and the Go proxy on `127.0.0.1:3211` behind Nginx:
 
-- `deploy/owu.service`: hardened systemd unit.
-- `deploy/nginx-owu.conf`: IP-host Nginx virtual host.
+- `deploy/owu.service`: hardened Vinext systemd unit.
+- `deploy/owu-proxy.service`: hardened Go proxy systemd unit.
+- `deploy/nginx-owu.conf`: HTTPS, Basic Auth, web UI, proxy, and WebSocket routing.
 
-The deployed app contains no proxy or access-check endpoint. The older `gateway/`, `compose.yaml`, and `demo-target/` directories are retained as historical authorized-gateway prototypes and are not part of the OWU production deployment.
+The public Nginx entry redirects HTTP to HTTPS and uses an IP-address certificate until a domain is configured. The browser will warn about the self-signed certificate. Do not reuse the server root password for Basic Auth.
 
 ## macOS app
 
-The current macOS direction is a lightweight SwiftUI address launcher with an embedded `WKWebView`, direct WebKit networking, local preferences, and no account or tunnel. See [docs/owu-macos-app-plan.md](docs/owu-macos-app-plan.md).
+The macOS plan remains a separate future surface. The current deliverable is the browser-based personal proxy.

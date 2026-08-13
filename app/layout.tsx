@@ -13,23 +13,23 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("http://8.219.11.175"),
+  metadataBase: new URL("https://8.219.11.175"),
   title: "OWU — Open Website Unblocker",
   description:
-    "Enter any HTTP or HTTPS address and open it directly in your browser.",
+    "A browser-password protected personal web proxy.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
   },
   openGraph: {
     title: "OWU — Open Website Unblocker",
-    description: "Open the web. One address away.",
+    description: "Your private browser-based web proxy.",
     images: ["/og.png"],
   },
   twitter: {
     card: "summary_large_image",
     title: "OWU — Open Website Unblocker",
-    description: "Open the web. One address away.",
+    description: "Your private browser-based web proxy.",
     images: ["/og.png"],
   },
 };

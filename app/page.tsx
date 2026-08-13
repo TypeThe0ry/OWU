@@ -25,6 +25,22 @@ function normalizeWebsite(value: string): { url?: string; error?: string } {
   }
 }
 
+function encodeOrigin(origin: string): string {
+  const bytes = new TextEncoder().encode(origin);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return window.btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function proxyAddress(value: string): { url?: string; error?: string } {
+  const normalized = normalizeWebsite(value);
+  if (!normalized.url) return normalized;
+  const target = new URL(normalized.url);
+  return {
+    url: `/browse/${encodeOrigin(target.origin)}${target.pathname}${target.search}${target.hash}`,
+  };
+}
+
 export default function Home() {
   const [target, setTarget] = useState("");
   const [message, setMessage] = useState("");
@@ -39,7 +55,7 @@ export default function Home() {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const result = normalizeWebsite(target);
+    const result = proxyAddress(target);
     if (!result.url) {
       setMessage(result.error ?? "Enter a valid website address.");
       return;
@@ -86,13 +102,13 @@ export default function Home() {
       </header>
 
       <section className="hero" aria-labelledby="page-title">
-        <div className="hero-badge"><span /> Web address launcher</div>
+        <div className="hero-badge"><span /> Personal web proxy</div>
         <h1 id="page-title">
           Open the web.
           <span>One address away.</span>
         </h1>
         <p className="hero-copy">
-          Enter any HTTP or HTTPS address. OWU opens it directly in your browser—no account and no setup.
+          Enter any HTTP or HTTPS address. OWU loads it through your private server while the address bar stays on OWU.
         </p>
 
         <form className="glass-search" onSubmit={handleSubmit} noValidate>
@@ -132,7 +148,7 @@ export default function Home() {
 
         <p className="direct-note" id="direct-note">
           <span aria-hidden="true">◇</span>
-          Direct browser navigation. OWU does not relay traffic or bypass network controls.
+          Browser-password protected. Destination sites see the OWU server connection, not your device address.
         </p>
       </section>
 

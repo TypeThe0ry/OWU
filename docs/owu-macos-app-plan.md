@@ -1,142 +1,131 @@
-# OWU for macOS — Product and implementation plan
+# OWU for macOS — personal proxy app plan
 
-## Product definition
+## Product position
 
-OWU for macOS is a lightweight, no-account web launcher and compact browser. A user enters any HTTP or HTTPS address and the app loads it directly with the system WebKit engine. It does not operate a relay, VPN, packet tunnel, traffic obfuscator, or firewall-bypass service.
+OWU for macOS is a small SwiftUI browser for the same password-protected OWU web proxy. The user enters a website address, and the app loads the encoded `/browse/{origin-token}/...` route in `WKWebView`. Destination sites receive the OWU server connection rather than a direct connection from the Mac.
 
-The native app should feel like the website: one address field, liquid-glass surfaces, automatic light/dark appearance, and very little chrome.
+The first release is an embedded browser, not a system VPN, SOCKS server, packet tunnel, or traffic-obfuscation tool.
 
-## MVP experience
+## First-run experience
 
-### Home
+1. Show the OWU server address, fixed to the owner's deployment by default.
+2. Ask for the Basic Auth username and password once.
+3. Save the credential in Keychain, never `UserDefaults` or logs.
+4. Validate `/healthz` through the authenticated HTTPS entry.
+5. Open the single-address home screen.
+
+For the current IP deployment, the server uses a self-signed certificate. A personal Developer ID build may pin that exact certificate fingerprint. A distributable release must use a normal domain and publicly trusted TLS certificate; it must not silently accept arbitrary server-trust failures.
+
+## Main interface
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
-│  ◉ OWU                                      Light / Dark     │
+│  OWU                                      Light / Dark   •   │
 │                                                              │
-│                    Open the web.                             │
-│                   One address away.                          │
+│                 Open the web through OWU.                    │
 │                                                              │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │ example.com                              Open website ↗ │  │
+│  │ example.com                              Open website  │  │
 │  └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│  Connected to your personal proxy                            │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Behavior:
-
-- Accept a hostname, full HTTP/HTTPS URL, path, query, fragment, and optional port.
-- Add `https://` when the user omits a scheme.
-- Reject non-web schemes and URLs containing embedded credentials.
-- Press Return to open in the in-app browser.
-- Never send the entered URL to an OWU server for proxying.
-- Store theme preference locally; keep history and favorites off by default in the first build.
-
-### Browser view
-
-- Compact unified toolbar: Back, Forward, Reload/Stop, address field, Open in default browser, Share.
-- One active page in MVP; tabs are a later milestone.
-- Loading progress appears as a subtle line beneath the toolbar.
-- Certificate, offline, DNS, and unsupported-scheme failures use plain English error views.
-- External application schemes such as `mailto:` require explicit user confirmation before leaving OWU.
-- Downloads require a save-panel confirmation and never execute automatically.
+After navigation, the window becomes a compact browser with Back, Forward, Reload, Home, an editable address field, current loading state, and an external-browser button.
 
 ## Technical architecture
 
-### Stack
-
-- Swift 6 language mode where the selected Xcode version supports it; otherwise Swift 5.10 with strict concurrency warnings.
-- SwiftUI application shell.
-- `WKWebView` wrapped with `NSViewRepresentable` for the browser surface.
-- `WKNavigationDelegate` for navigation policy, progress, failures, downloads, and external-scheme decisions.
-- App Sandbox with outgoing network client entitlement only.
-- `@AppStorage` for appearance and small local preferences.
-- `WKWebsiteDataStore.default()` for normal browsing; an optional private session can use `.nonPersistent()` later.
-
-Apple documents `WKWebView` as the platform-native interactive web-content view with back/forward navigation and delegate-controlled policy: https://developer.apple.com/documentation/webkit/wkwebview
-
-Sandboxed network browsing requires the outgoing network client entitlement: https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.network.client
-
-### Core modules
-
 ```text
-OWUApp
-├── AppShell
-│   ├── ThemeController
-│   └── WindowCommands
-├── Addressing
-│   ├── AddressNormalizer
-│   └── ExternalSchemePolicy
-├── Browser
-│   ├── BrowserModel
-│   ├── WebViewContainer
-│   ├── NavigationDelegate
-│   └── DownloadCoordinator
-└── Privacy
-    ├── WebsiteDataController
-    └── OptionalPrivateSession
+SwiftUI shell
+├── AppModel
+│   ├── OWU server configuration
+│   ├── URL normalization and origin-token encoding
+│   └── connection and error state
+├── KeychainCredentialStore
+│   └── Basic Auth username/password
+├── ProxyWebView
+│   ├── WKWebView
+│   ├── WKNavigationDelegate
+│   └── WKUIDelegate
+└── TrustPolicy
+    ├── normal system trust for production domains
+    └── exact certificate pin for the personal IP build
 ```
 
-`AddressNormalizer` should be a pure, heavily tested module. It returns either a canonical `URL` or a localized error; it performs no network request.
+Use `WKWebView` so page networking, cookies, JavaScript, downloads, and browser navigation use Apple's WebKit stack. App Sandbox needs outgoing network access through `com.apple.security.network.client`.
 
-### Network and security decisions
+## Authentication handling
 
-- Prefer HTTPS and add it for bare hostnames.
-- Do not disable TLS certificate validation.
-- App Transport Security remains enabled. Apple notes that ATS requires secure TLS connections by default. If broad HTTP browsing is a hard product requirement, use the web-content-only exception rather than disabling ATS for all app networking, and disclose the risk before loading cleartext pages: https://developer.apple.com/documentation/security/preventing-insecure-network-connections
-- Do not add Network Extension entitlements: they are unnecessary for a direct WebKit browser and would incorrectly move the product toward system tunneling.
-- Do not inject JavaScript into third-party pages in MVP.
-- Do not implement automatic credential capture, page-content logging, traffic inspection, certificate overrides, or background crawling.
-- Keep analytics URL-free; record only coarse app events if analytics is added later.
+- Handle only an HTTP Basic authentication challenge whose protection space host exactly matches the configured OWU server.
+- Supply the Keychain credential with session persistence.
+- Never supply the OWU credential to another host or to a target-site authentication challenge.
+- On HTTP 401, clear the in-memory credential, return to the credential screen, and preserve the typed destination locally.
+- Provide an explicit “Forget proxy credential” action that deletes the Keychain item.
 
-## Visual system
+The proxy remains responsible for stripping `Authorization` before upstream requests.
 
-- Material: translucent SwiftUI materials with a restrained colored ambient backdrop.
-- Shape: 18–24 point continuous corners for primary glass surfaces.
-- Typography: system rounded display face for the headline; monospaced address entry.
-- Light: cool mist background, dark navy text, blue-violet accents.
-- Dark: near-black blue background, white text, higher-opacity glass borders.
-- Accessibility: Reduce Transparency replaces glass with opaque surfaces; Increase Contrast strengthens borders; Reduce Motion removes ambient animation.
-- Keyboard: Command-L focuses the address field; Command-R reloads; Command-[ and Command-] navigate; Command-Shift-P toggles private session when implemented.
+## Navigation rules
+
+- Accept only `http` and `https` destination addresses.
+- Reject embedded usernames and passwords.
+- Add `https://` when the scheme is omitted.
+- Encode only `scheme://host[:port]` with Base64 URL encoding; keep the target path and query after the opaque origin token.
+- Load only the configured OWU origin in the main `WKWebView`.
+- Treat downloads, `mailto:`, `tel:`, and external application schemes as explicit user-confirmed handoffs.
+- Display the decoded destination hostname in app chrome even though the web view URL remains on OWU.
+
+## Privacy and storage
+
+- Store the OWU credential in Keychain with a service identifier scoped to the configured server.
+- Keep browsing history off by default.
+- Do not add analytics, crash payloads containing URLs, request-body logging, or cross-device sync.
+- Provide clear buttons for clearing WebKit website data and target cookies.
+- Log only coarse connection state in release builds.
+
+## Compatibility expectations
+
+The app inherits the web proxy's compatibility boundary. Server-rendered sites and conventional SPAs should work best. Strict CSP, OAuth redirect validation, CAPTCHA, DRM, Service Worker, target Basic Auth, certificate pinning, and JavaScript that hardcodes origin assumptions can fail. The app cannot make an incompatible rewrite proxy equivalent to a native network tunnel.
 
 ## Delivery milestones
 
-### M0 — Product shell (1–2 days)
+### M0 — Swift package and URL model
 
-- New Xcode macOS app target and signing setup.
-- Liquid-glass home, theme behavior, address normalizer, unit tests.
-- Acceptance: launch, theme, keyboard focus, and URL normalization work without network access.
+- SwiftUI macOS 14 target.
+- URL normalization and origin-token encoder shared with unit tests.
+- Acceptance: Unicode hostnames, ports, paths, queries, fragments, and invalid schemes have deterministic tests.
 
-### M1 — Direct browser (2–4 days)
+### M1 — Authenticated WebKit shell
 
-- `WKWebView`, navigation model, progress, back/forward/reload, error surfaces.
-- Acceptance: HTTPS sites, custom ports, redirects, cookies, SPA navigation, media, and pop-up decisions tested.
+- Server setup, Keychain credential storage, Basic Auth challenge handling, and certificate policy.
+- Acceptance: a correct credential opens OWU; an incorrect credential returns to setup; the credential never appears in logs or preferences.
 
-### M2 — System integration (2–3 days)
+### M2 — Browser workflow
 
-- Open-with-OWU URL handling, Share menu, Open in default browser, safe downloads.
-- Acceptance: `http`/`https` links can be handed to OWU; non-web schemes require confirmation.
+- Address bar, navigation controls, progress, error page, downloads, theme, and keyboard shortcuts.
+- Acceptance: browse through OWU across two sites, navigate within each site, return Home, and clear website data.
 
-### M3 — Privacy and quality (2–4 days)
+### M3 — Hardening
 
-- Clear website data, optional private window, VoiceOver, keyboard commands, crash/error handling.
-- Acceptance: privacy mode is nonpersistent, data clearing works, and accessibility audit passes.
+- Exact-host credential scoping, pinned personal certificate option, normal public TLS path, process crash recovery, sleep/wake testing, and accessibility review.
+- Acceptance: authentication is never answered for a non-OWU host; an unexpected certificate fails closed.
 
-### M4 — Distribution (2–3 days)
+### M4 — Distribution
 
-- App icon, Developer ID signing/notarization or Mac App Store packaging, privacy copy, update strategy.
-- Acceptance: clean install on Apple silicon and Intel test machines, launch after restart, Gatekeeper verification, and uninstall checklist.
+- Developer ID signing, hardened runtime, notarization, update feed, rollback, and privacy documentation.
+- Acceptance: install and update on a clean Mac without Xcode; previous signed build remains recoverable.
 
-## Test matrix
+## Explicit non-goals for the first app
 
-- Addressing: bare host, uppercase host, IDN, IPv6 literal, explicit port, path/query/fragment, malformed URL, credentials, unsupported schemes.
-- Navigation: redirects, back/forward, SPA history, pop-up, target blank, download, authentication prompt, certificate failure, offline/DNS error.
-- Appearance: light, dark, system switch, Reduce Transparency, Increase Contrast, 200% text scale.
-- Lifecycle: cold start, multiple windows, sleep/wake, network change, crash recovery.
-- Privacy: clear cookies/cache, private session teardown, no URL values in telemetry or logs.
+- `NEPacketTunnelProvider` or system-wide routing.
+- Per-app VPN, SOCKS5, HTTP CONNECT, UDP, or arbitrary TCP forwarding.
+- Protocol camouflage or network-policy bypass.
+- Multi-user accounts, cloud history, shared credentials, or public proxy discovery.
 
-## Explicit non-goals
+## Apple references
 
-- No VPN, packet tunnel, SOCKS, HTTP CONNECT, proxy auto-configuration, traffic relay, protocol disguise, or censorship/firewall evasion.
-- No promise that OWU can reach a destination blocked by the user’s network, DNS provider, organization, region, or the destination itself.
-- No account system, cloud history, sync, or paid tier in MVP.
+- `WKWebView`: https://developer.apple.com/documentation/webkit/wkwebview
+- `WKNavigationDelegate`: https://developer.apple.com/documentation/webkit/wknavigationdelegate
+- Keychain Services: https://developer.apple.com/documentation/security/keychain-services
+- App Sandbox outgoing network entitlement: https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.network.client
+- Notarization: https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution

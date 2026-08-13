@@ -1,0 +1,27 @@
+[Unit]
+Description=Open Website Unblocker personal proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www
+Group=www
+WorkingDirectory=/www/wwwroot/owu/current
+Environment=OWU_PROXY_LISTEN_ADDR=127.0.0.1:3211
+ExecStart=/usr/local/bin/owu-proxy
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
