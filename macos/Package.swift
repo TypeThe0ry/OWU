@@ -3,14 +3,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "PermitAccessClient",
+    name: "OWUMacClient",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .library(name: "PermitCore", targets: ["PermitCore"]),
         .library(name: "PermitMacPlatform", targets: ["PermitMacPlatform"]),
-        .executable(name: "PermitAccessClient", targets: ["PermitApp"])
+        .executable(name: "OWU", targets: ["PermitApp"])
     ],
     targets: [
         .target(

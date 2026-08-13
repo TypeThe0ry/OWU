@@ -24,6 +24,7 @@ import (
 const (
 	browsePrefix        = "/browse/"
 	socketPrefix        = "/socket/"
+	tunnelPrefix        = "/tunnel/"
 	maxRequestBodyBytes = 64 << 20
 	maxRewriteBodyBytes = 16 << 20
 )
@@ -31,6 +32,8 @@ const (
 type Config struct {
 	ListenAddr        string
 	DemoAllowedOrigin string
+	TunnelKey         string
+	TunnelResources   map[string]TCPResource
 }
 
 func LoadConfig() Config {
@@ -38,16 +41,31 @@ func LoadConfig() Config {
 	if listen == "" {
 		listen = "127.0.0.1:3211"
 	}
-	return Config{ListenAddr: listen}
+	resources, err := parseTCPResources(os.Getenv("OWU_TCP_RESOURCES"))
+	if err != nil {
+		panic("invalid OWU_TCP_RESOURCES: " + err.Error())
+	}
+	return Config{
+		ListenAddr:      listen,
+		TunnelKey:       strings.TrimSpace(os.Getenv("OWU_TUNNEL_KEY")),
+		TunnelResources: resources,
+	}
 }
 
 type Server struct {
 	safety            safety.Policy
 	demoAllowedOrigin string
+	tunnelKey         string
+	tunnelResources   map[string]TCPResource
 }
 
 func New(config Config) *Server {
-	return &Server{safety: safePolicy(config.DemoAllowedOrigin), demoAllowedOrigin: config.DemoAllowedOrigin}
+	return &Server{
+		safety:            safePolicy(config.DemoAllowedOrigin),
+		demoAllowedOrigin: config.DemoAllowedOrigin,
+		tunnelKey:         config.TunnelKey,
+		tunnelResources:   config.TunnelResources,
+	}
 }
 
 func safePolicy(demoOrigin string) safety.Policy {
@@ -64,6 +82,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleBrowse(w, r)
 	case strings.HasPrefix(r.URL.Path, socketPrefix):
 		s.handleSocket(w, r)
+	case strings.HasPrefix(r.URL.Path, tunnelPrefix):
+		s.handleTunnel(w, r)
 	default:
 		s.handleRefererFallback(w, r)
 	}

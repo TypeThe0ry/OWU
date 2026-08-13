@@ -9,6 +9,7 @@ User=www
 Group=www
 WorkingDirectory=/www/wwwroot/owu/current
 Environment=OWU_PROXY_LISTEN_ADDR=127.0.0.1:3211
+EnvironmentFile=-/etc/owu/owu-proxy.env
 ExecStart=/usr/local/bin/owu-proxy
 Restart=on-failure
 RestartSec=3

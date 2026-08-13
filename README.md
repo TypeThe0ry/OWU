@@ -2,7 +2,7 @@
 
 OWU is a browser-password protected personal web proxy. The page stays focused on one action: enter an HTTP or HTTPS address and load it through the OWU server.
 
-OWU rewrites common HTML, CSS, navigation, form, redirect, fetch, XHR, EventSource, and WebSocket references so browsing remains on the OWU origin. It is not a VPN and does not guarantee compatibility with strict CSP, OAuth, CAPTCHA, DRM, Service Worker, or complex browser-origin assumptions.
+OWU rewrites common HTML, CSS, navigation, form, redirect, fetch, XHR, Beacon, Worker, EventSource, WebSocket, and dynamically inserted DOM references so browsing remains on the OWU origin. It is not a VPN and does not guarantee compatibility with OAuth, CAPTCHA, DRM, Service Worker, or complex browser-origin assumptions.
 
 ## Product
 
@@ -21,7 +21,7 @@ npm install
 npm run dev
 ```
 
-The web UI runs on port `3000`. Build the Go proxy with `go build ./cmd/owu-proxy` from `gateway/`, then run it on `127.0.0.1:3211`. Production Nginx routes `/browse/` and `/socket/` to the proxy.
+The web UI runs on port `3000`. Build the Go proxy with `go build ./cmd/owu-proxy` from `gateway/`, then run it on `127.0.0.1:3211`. Production Nginx routes `/browse/`, `/socket/`, and `/tunnel/` to the proxy.
 
 ## Validation
 
@@ -44,4 +44,7 @@ The public Nginx entry redirects HTTP to HTTPS and uses an IP-address certificat
 
 ## macOS app
 
-The macOS plan remains a separate future surface. The current deliverable is the browser-based personal proxy.
+`macos/` contains a SwiftUI macOS 14+ client with working loopback TCP-to-WSS
+bridges for fixed `ssh` and `minecraft` resource IDs. It stores the owner
+password in Keychain, supports certificate pinning for the current self-signed
+deployment, and binds listeners only to `127.0.0.1`. See `macos/README.md`.

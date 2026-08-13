@@ -206,6 +206,23 @@ if(window.WebSocket){const NativeWebSocket=window.WebSocket;window.WebSocket=fun
 const nativeOpen=window.open;window.open=function(url){const args=Array.from(arguments);if(args.length)args[0]=proxify(url);return nativeOpen.apply(this,args);};
 const pushState=history.pushState;history.pushState=function(state,title,url){return pushState.call(this,state,title,url==null?url:proxify(url));};
 const replaceState=history.replaceState;history.replaceState=function(state,title,url){return replaceState.call(this,state,title,url==null?url:proxify(url));};
-window.__OWU__={target:targetBase,proxify};
+if(navigator.sendBeacon){const nativeBeacon=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(url,data){return nativeBeacon(proxify(url),data);};}
+if(window.Worker){const NativeWorker=window.Worker;window.Worker=function(url,options){return new NativeWorker(proxify(url),options);};window.Worker.prototype=NativeWorker.prototype;Object.setPrototypeOf(window.Worker,NativeWorker);}
+if(window.SharedWorker){const NativeSharedWorker=window.SharedWorker;window.SharedWorker=function(url,options){return new NativeSharedWorker(proxify(url),options);};window.SharedWorker.prototype=NativeSharedWorker.prototype;Object.setPrototypeOf(window.SharedWorker,NativeSharedWorker);}
+const urlAttributes=new Set(["href","src","action","formaction","poster","data","cite","background"]);
+const proxifySrcset=(value)=>String(value).split(",").map(part=>{const fields=part.trim().split(/\s+/);if(fields[0])fields[0]=proxify(fields[0]);return fields.join(" ");}).join(", ");
+const proxifyStyle=(value)=>String(value).replace(/url\(\s*(["']?)(.*?)\1\s*\)/gi,(match,quote,raw)=>"url("+quote+proxify(raw)+quote+")");
+const rewriteAttributeValue=(name,value)=>{const lower=String(name).toLowerCase();if(urlAttributes.has(lower))return proxify(value);if(lower==="srcset")return proxifySrcset(value);if(lower==="style")return proxifyStyle(value);return value;};
+const nativeSetAttribute=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){return nativeSetAttribute.call(this,name,rewriteAttributeValue(name,value));};
+const patchURLProperty=(prototype,name,transform=proxify)=>{try{const descriptor=Object.getOwnPropertyDescriptor(prototype,name);if(!descriptor||!descriptor.set||!descriptor.get)return;Object.defineProperty(prototype,name,{configurable:descriptor.configurable,enumerable:descriptor.enumerable,get:descriptor.get,set(value){descriptor.set.call(this,transform(value));}});}catch{}};
+for(const [prototype,name,transform] of [[HTMLAnchorElement.prototype,"href"],[HTMLAreaElement.prototype,"href"],[HTMLImageElement.prototype,"src"],[HTMLImageElement.prototype,"srcset",proxifySrcset],[HTMLScriptElement.prototype,"src"],[HTMLLinkElement.prototype,"href"],[HTMLFormElement.prototype,"action"],[HTMLIFrameElement.prototype,"src"],[HTMLSourceElement.prototype,"src"],[HTMLSourceElement.prototype,"srcset",proxifySrcset],[HTMLMediaElement.prototype,"src"]])patchURLProperty(prototype,name,transform);
+if(window.CSSStyleSheet&&CSSStyleSheet.prototype.insertRule){const nativeInsertRule=CSSStyleSheet.prototype.insertRule;CSSStyleSheet.prototype.insertRule=function(rule,index){return nativeInsertRule.call(this,proxifyStyle(rule),index);};}
+const rewriteElement=(element)=>{if(!(element instanceof Element))return;for(const attribute of Array.from(element.attributes||[])){const rewritten=rewriteAttributeValue(attribute.name,attribute.value);if(rewritten!==attribute.value)nativeSetAttribute.call(element,attribute.name,rewritten);}};
+const rewriteTree=(node)=>{rewriteElement(node);if(node&&node.querySelectorAll)for(const child of node.querySelectorAll("[href],[src],[action],[formaction],[poster],[data],[cite],[background],[srcset],[style]"))rewriteElement(child);};
+document.addEventListener("click",event=>{const anchor=event.target&&event.target.closest?event.target.closest("a[href]"):null;if(anchor)nativeSetAttribute.call(anchor,"href",proxify(anchor.getAttribute("href")));},true);
+document.addEventListener("submit",event=>{const form=event.target;if(form instanceof HTMLFormElement&&form.hasAttribute("action"))nativeSetAttribute.call(form,"action",proxify(form.getAttribute("action")));},true);
+const observer=new MutationObserver(records=>{for(const record of records){if(record.type==="attributes")rewriteElement(record.target);for(const node of record.addedNodes)rewriteTree(node);}});observer.observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:["href","src","action","formaction","poster","data","cite","background","srcset","style"]});
+rewriteTree(document.documentElement);
+window.__OWU__={target:targetBase,proxify,rewrite:rewriteTree};
 })();`
 }

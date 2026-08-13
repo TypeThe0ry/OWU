@@ -2,57 +2,99 @@
 import Combine
 import Foundation
 import PermitCore
+import PermitMacPlatform
 
 @MainActor
 final class AppModel: ObservableObject {
-    enum Section: String, CaseIterable, Identifiable {
-        case home = "Home"
-        case proxy = "Proxy"
-        case resources = "Resources"
-        case device = "Local Security"
-        case settings = "Settings"
+    @Published var serverAddress: String
+    @Published var username: String
+    @Published var password = ""
+    @Published var certificateFingerprint: String
+    @Published private(set) var states: [String: OWUTunnelState] = [:]
+    @Published var notice: String?
 
-        var id: String { rawValue }
+    let presets = OWUTunnelPreset.defaults
+    private let defaults = UserDefaults.standard
+    private let credentialStore = OWUCredentialStore()
+    private var tunnels: [String: WebSocketLoopbackTunnel] = [:]
 
-        var systemImage: String {
-            switch self {
-            case .home: return "house"
-            case .proxy: return "point.3.connected.trianglepath.dotted"
-            case .resources: return "server.rack"
-            case .device: return "laptopcomputer"
-            case .settings: return "gearshape"
-            }
+    init() {
+        serverAddress = defaults.string(forKey: "owu.server") ?? "https://8.219.11.175"
+        username = defaults.string(forKey: "owu.username") ?? "owu"
+        certificateFingerprint = defaults.string(forKey: "owu.certificateSHA256")
+            ?? "A4:03:FF:0C:22:E8:E5:03:18:97:D1:53:6E:B7:B8:C0:68:BB:16:15:2E:C6:8B:BF:C4:45:7A:2C:76:A6:EC:E2"
+        for preset in presets { states[preset.id] = .stopped }
+        loadSavedPassword()
+    }
+
+    func state(for preset: OWUTunnelPreset) -> OWUTunnelState {
+        states[preset.id] ?? .stopped
+    }
+
+    func toggle(_ preset: OWUTunnelPreset) {
+        if tunnels[preset.id] != nil {
+            stop(preset)
+        } else {
+            start(preset)
         }
     }
 
-    @Published var selectedSection: Section? = .home
-    @Published var destinationInput = ""
-    @Published var resources: [AuthorizedResource] = []
-    @Published var proxyState: LocalProxyState = .stopped
-    @Published var notice: String?
-
-    let socksAddress = "127.0.0.1:1080"
-    let connectAddress = "127.0.0.1:8080"
-
-    func refreshResources() {
-        notice = "The public resource catalog client is not configured in this scaffold."
+    func stopAll() {
+        for preset in presets { stop(preset) }
     }
 
-    func continueToResource() {
+    private func start(_ preset: OWUTunnelPreset) {
         do {
-            _ = try DestinationParser().parse(destinationInput)
-            notice = "Public catalog lookup and route-grant resolution are not configured in this scaffold."
+            let configuration = try makeConfiguration()
+            save(configuration)
+            let tunnel = WebSocketLoopbackTunnel(preset: preset, server: configuration) { [weak self] state in
+                Task { @MainActor in self?.states[preset.id] = state }
+            }
+            tunnels[preset.id] = tunnel
+            try tunnel.start()
         } catch {
+            tunnels[preset.id] = nil
+            states[preset.id] = .failed(error.localizedDescription)
             notice = error.localizedDescription
         }
     }
 
-    func startProxy() {
-        notice = "The listener remains disabled until authenticated parsers and the gateway transport are connected."
+    private func stop(_ preset: OWUTunnelPreset) {
+        tunnels.removeValue(forKey: preset.id)?.stop()
+        states[preset.id] = .stopped
     }
 
-    func dismissNotice() {
-        notice = nil
+    private func makeConfiguration() throws -> OWUServerConfiguration {
+        guard let url = URL(string: serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw OWUConfigurationError.invalidServer
+        }
+        return try OWUServerConfiguration(
+            baseURL: url,
+            username: username,
+            password: password,
+            certificateSHA256: certificateFingerprint
+        )
+    }
+
+    private func save(_ configuration: OWUServerConfiguration) {
+        defaults.set(configuration.baseURL.absoluteString, forKey: "owu.server")
+        defaults.set(configuration.username, forKey: "owu.username")
+        defaults.set(certificateFingerprint, forKey: "owu.certificateSHA256")
+        do {
+            try credentialStore.save(
+                password: configuration.password,
+                serverHost: configuration.baseURL.host ?? "",
+                username: configuration.username
+            )
+        } catch {
+            notice = "The tunnel started, but the password could not be saved to Keychain."
+        }
+    }
+
+    private func loadSavedPassword() {
+        guard let host = URL(string: serverAddress)?.host else { return }
+        do { password = try credentialStore.load(serverHost: host, username: username) ?? "" }
+        catch { notice = "The saved password could not be read from Keychain." }
     }
 }
 #endif

@@ -1,182 +1,166 @@
 #if os(macOS)
-import AppKit
 import PermitCore
 import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        NavigationSplitView {
-            List(AppModel.Section.allCases, selection: $model.selectedSection) { section in
-                Label(section.rawValue, systemImage: section.systemImage)
-                    .tag(section)
-            }
-            .navigationTitle("Permit")
-        } detail: {
-            Group {
-                switch model.selectedSection ?? .home {
-                case .home: HomeView()
-                case .proxy: ProxyView()
-                case .resources: ResourcesView()
-                case .device: DeviceView()
-                case .settings: SettingsView()
+        ZStack {
+            LinearGradient(
+                colors: colorScheme == .dark
+                    ? [Color(red: 0.04, green: 0.05, blue: 0.09), Color(red: 0.08, green: 0.11, blue: 0.18)]
+                    : [Color(red: 0.92, green: 0.96, blue: 1), Color(red: 0.98, green: 0.95, blue: 1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    header
+                    serverCard
+                    resources
+                    footer
                 }
+                .padding(32)
+                .frame(maxWidth: 940)
             }
-            .padding(28)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .alert("Permit", isPresented: noticeBinding) {
-            Button("OK", action: model.dismissNotice)
+        .alert("OWU", isPresented: Binding(
+            get: { model.notice != nil },
+            set: { if !$0 { model.notice = nil } }
+        )) {
+            Button("OK") { model.notice = nil }
         } message: {
             Text(model.notice ?? "")
         }
     }
 
-    private var noticeBinding: Binding<Bool> {
-        Binding(
-            get: { model.notice != nil },
-            set: { if !$0 { model.dismissNotice() } }
-        )
-    }
-}
-
-private struct HomeView: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            HStack {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Access Client")
-                        .font(.largeTitle.bold())
-                    Text("Open public resources that have been pre-registered with Permit.")
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Label("Catalog offline", systemImage: "circle.fill")
+    private var header: some View {
+        HStack(spacing: 16) {
+            Image(systemName: "network.badge.shield.half.filled")
+                .font(.system(size: 34, weight: .semibold))
+                .frame(width: 62, height: 62)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Open Website Unblocker")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                Text("OWU for macOS")
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Status: Public resource catalog offline")
             }
+            Spacer()
+            Circle().fill(.green).frame(width: 8, height: 8)
+            Text("Local listeners only").font(.caption).foregroundStyle(.secondary)
+        }
+    }
 
-            GroupBox("Access an approved resource") {
-                VStack(alignment: .leading, spacing: 12) {
-                    TextField("Enter a URL or host:port", text: $model.destinationInput)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Authorized resource URL or host and port")
-                        .onSubmit(model.continueToResource)
-                    HStack {
-                        Text("No account is required. Unknown destinations are denied.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Continue", action: model.continueToResource)
-                            .keyboardShortcut(.defaultAction)
-                    }
+    private var serverCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Gateway").font(.headline)
+            TextField("https://your-owu-server.example", text: $model.serverAddress)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("OWU server address")
+            HStack {
+                TextField("Username", text: $model.username)
+                    .textFieldStyle(.roundedBorder)
+                SecureField("Password", text: $model.password)
+                    .textFieldStyle(.roundedBorder)
+            }
+            TextField("TLS certificate SHA-256 fingerprint (optional for public certificates)", text: $model.certificateFingerprint)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+            Text("The password is saved in Keychain. The fingerprint pins a self-signed OWU certificate.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .glassCard()
+    }
+
+    private var resources: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Local access").font(.title2.bold())
+            ForEach(model.presets) { preset in
+                resourceCard(preset)
+            }
+        }
+    }
+
+    private func resourceCard(_ preset: OWUTunnelPreset) -> some View {
+        let state = model.state(for: preset)
+        return HStack(spacing: 18) {
+            Image(systemName: preset.symbol)
+                .font(.system(size: 24, weight: .semibold))
+                .frame(width: 48, height: 48)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text(preset.name).font(.headline)
+                    statusLabel(state)
                 }
-                .padding(.top, 8)
+                Text("127.0.0.1:\(preset.localPort)")
+                    .font(.system(.body, design: .monospaced))
+                Text(preset.usage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
-
-            GroupBox("Before you continue") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Connections are encrypted to the access gateway.", systemImage: "lock")
-                    Label("Only pre-registered public resources can receive a route grant.", systemImage: "checkmark.shield")
-                    Label("Connection metadata may be recorded for security.", systemImage: "list.bullet.clipboard")
-                    Label("Passwords and request bodies are not recorded.", systemImage: "eye.slash")
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 8)
-            }
-
-            Button("Refresh public resources", action: model.refreshResources)
+            Spacer()
+            Button(buttonTitle(state)) { model.toggle(preset) }
+                .buttonStyle(.borderedProminent)
+                .tint(isRunning(state) ? .red : .accentColor)
                 .controlSize(.large)
         }
+        .glassCard()
     }
-}
 
-private struct ProxyView: View {
-    @EnvironmentObject private var model: AppModel
+    private func statusLabel(_ state: OWUTunnelState) -> some View {
+        Text(statusText(state))
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(statusColor(state).opacity(0.15), in: Capsule())
+            .foregroundStyle(statusColor(state))
+    }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Text("Local Proxy").font(.largeTitle.bold())
-            Text("Configure an app to use a loopback proxy for a pre-registered public resource. Every connection still requires a server-issued route grant.")
-                .foregroundStyle(.secondary)
-            addressRow(name: "SOCKS5", address: model.socksAddress)
-            addressRow(name: "HTTP CONNECT", address: model.connectAddress)
-            Label("Stopped", systemImage: "stop.circle")
-                .accessibilityLabel("Local proxy status: Stopped")
-            Button("Start local proxy", action: model.startProxy)
-                .disabled(true)
-            Text("Disabled in this scaffold until rotating proxy authentication, protocol parsing, and the gateway transport are integrated.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    private var footer: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle")
+            Text("Each local port maps to one server-configured resource ID. The Mac app never sends an arbitrary destination to the gateway.")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    private func isRunning(_ state: OWUTunnelState) -> Bool {
+        switch state { case .starting, .ready: return true; default: return false }
+    }
+    private func buttonTitle(_ state: OWUTunnelState) -> String { isRunning(state) ? "Stop" : "Start" }
+    private func statusText(_ state: OWUTunnelState) -> String {
+        switch state {
+        case .stopped: return "Stopped"
+        case .starting: return "Starting"
+        case .ready: return "Ready"
+        case .failed: return "Failed"
         }
     }
-
-    private func addressRow(name: String, address: String) -> some View {
-        HStack {
-            Text(name).frame(width: 120, alignment: .leading)
-            Text(address).font(.system(.body, design: .monospaced))
-            Spacer()
-            Button("Copy") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(address, forType: .string)
-            }
-            .accessibilityLabel("Copy \(name) address")
-        }
-    }
-}
-
-private struct ResourcesView: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Resources").font(.largeTitle.bold())
-            if model.resources.isEmpty {
-                ContentUnavailableView(
-                    "No approved resources",
-                    systemImage: "server.rack",
-                    description: Text("Connect the catalog client to see public services registered with Permit.")
-                )
-            }
+    private func statusColor(_ state: OWUTunnelState) -> Color {
+        switch state {
+        case .ready: return .green
+        case .starting: return .orange
+        case .failed: return .red
+        case .stopped: return .secondary
         }
     }
 }
 
-private struct DeviceView: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Local Security").font(.largeTitle.bold())
-            LabeledContent("Installation key", value: "Created when the gateway is configured")
-            LabeledContent("Private material", value: "Keychain / Secure Enclave when available")
-            LabeledContent("Policy sync", value: "Not yet synced")
-            Text("No account is required. The installation key can bind short-lived grants to this Mac without identifying a user.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct SettingsView: View {
-    @State private var launchAtLogin = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Settings").font(.largeTitle.bold())
-            Toggle("Launch Permit at login", isOn: $launchAtLogin)
-                .disabled(true)
-            GroupBox("System tunnel") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Not available in this build", systemImage: "network.slash")
-                    Text("Network Extension support requires approved entitlements, provisioning, signing, and testing on physical Macs. Only approved resource routes will be eligible for split tunneling.")
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 8)
-            }
-        }
+private extension View {
+    func glassCard() -> some View {
+        padding(20)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.16)))
+            .shadow(color: .black.opacity(0.08), radius: 18, y: 8)
     }
 }
 #endif

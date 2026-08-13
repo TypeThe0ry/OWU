@@ -2,14 +2,14 @@
 import SwiftUI
 
 @main
-struct PermitAccessClientApp: App {
+struct OWUMacClientApp: App {
     @StateObject private var model = AppModel()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
-                .frame(minWidth: 760, minHeight: 520)
+                .frame(minWidth: 760, minHeight: 640)
         }
         .windowResizability(.contentMinSize)
     }
@@ -18,9 +18,9 @@ struct PermitAccessClientApp: App {
 import Foundation
 
 @main
-enum PermitAccessClientUnsupportedHost {
+enum OWUMacClientUnsupportedHost {
     static func main() {
-        print("PermitAccessClient requires macOS 14 or later. Run swift test to verify PermitCore on this host.")
+        print("OWU requires macOS 14 or later. Run swift test to verify PermitCore on this host.")
     }
 }
 #endif

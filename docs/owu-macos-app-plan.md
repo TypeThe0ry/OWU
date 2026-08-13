@@ -1,131 +1,145 @@
-# OWU for macOS — personal proxy app plan
+# OWU for macOS — implementation plan
 
 ## Product position
 
-OWU for macOS is a small SwiftUI browser for the same password-protected OWU web proxy. The user enters a website address, and the app loads the encoded `/browse/{origin-token}/...` route in `WKWebView`. Destination sites receive the OWU server connection rather than a direct connection from the Mac.
-
-The first release is an embedded browser, not a system VPN, SOCKS server, packet tunnel, or traffic-obfuscation tool.
-
-## First-run experience
-
-1. Show the OWU server address, fixed to the owner's deployment by default.
-2. Ask for the Basic Auth username and password once.
-3. Save the credential in Keychain, never `UserDefaults` or logs.
-4. Validate `/healthz` through the authenticated HTTPS entry.
-5. Open the single-address home screen.
-
-For the current IP deployment, the server uses a self-signed certificate. A personal Developer ID build may pin that exact certificate fingerprint. A distributable release must use a normal domain and publicly trusted TLS certificate; it must not silently accept arbitrary server-trust failures.
-
-## Main interface
+OWU for macOS is the desktop companion for the owner's password-protected OWU
+gateway. The first working slice exposes a few loopback-only TCP ports and
+transports them over authenticated WebSockets on the existing HTTPS entry.
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│  OWU                                      Light / Dark   •   │
-│                                                              │
-│                 Open the web through OWU.                    │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │ example.com                              Open website  │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  Connected to your personal proxy                            │
-└──────────────────────────────────────────────────────────────┘
+Minecraft / SSH client
+        │ TCP to 127.0.0.1 only
+        ▼
+OWU macOS app (NWListener)
+        │ WSS + Basic Auth + tunnel key
+        ▼
+OWU Nginx :443 ──► Go /tunnel/{resource_id}
+                         │ exact server-side mapping
+                         ▼
+                    owned service
 ```
 
-After navigation, the window becomes a compact browser with Back, Forward, Reload, Home, an editable address field, current loading state, and an external-browser button.
+The client never sends a raw destination to `/tunnel/`. Server configuration
+maps `ssh` and `minecraft` to exact `host:port` values. This keeps the tunnel a
+small personal remote-access surface rather than a public CONNECT proxy.
 
-## Technical architecture
+## Current implementation
+
+- SwiftUI macOS 14 app with liquid-glass light/dark presentation.
+- Gateway URL, Basic Auth username/password, and optional TLS certificate pin.
+- Password storage through Keychain Services.
+- `NWListener` bound to `127.0.0.1` only.
+- Binary TCP bridging through `URLSessionWebSocketTask`.
+- One independent listener and lifecycle per configured resource.
+- Default local mappings:
+  - SSH: `127.0.0.1:2222` → resource ID `ssh`.
+  - Minecraft: `127.0.0.1:25565` → resource ID `minecraft`.
+- Portable Swift tests for request construction, credential placement, resource
+  ID validation, and default ports.
+
+The current server maps `ssh` to its own `127.0.0.1:22`. It also reserves the
+`minecraft` ID for `127.0.0.1:25565`; that route becomes usable when a Minecraft
+server is actually listening there, or when the operator changes the exact
+server-side mapping.
+
+## Authentication and trust
+
+1. Nginx validates the same browser Basic Auth credential used by the website.
+2. The app repeats the owner password in `X-OWU-Tunnel-Key`; Go validates it in
+   constant time before choosing a resource.
+3. Target sites and proxied JavaScript never receive this header.
+4. A normal domain uses system TLS trust.
+5. The current IP/self-signed deployment uses an explicit SHA-256 leaf pin.
+6. A pin mismatch, wrong password, unknown resource, or offline target fails the
+   connection without a direct-network fallback.
+
+## UX
+
+The first window contains one Gateway card and two resource cards. Each resource
+shows its loopback address, a ready/failed state, a usage string, and one
+Start/Stop button. No account or separate registration screen is required.
+
+SSH example:
+
+```sh
+ssh -p 2222 root@127.0.0.1
+```
+
+Minecraft example:
 
 ```text
-SwiftUI shell
-├── AppModel
-│   ├── OWU server configuration
-│   ├── URL normalization and origin-token encoding
-│   └── connection and error state
-├── KeychainCredentialStore
-│   └── Basic Auth username/password
-├── ProxyWebView
-│   ├── WKWebView
-│   ├── WKNavigationDelegate
-│   └── WKUIDelegate
-└── TrustPolicy
-    ├── normal system trust for production domains
-    └── exact certificate pin for the personal IP build
+Server address: 127.0.0.1:25565
 ```
-
-Use `WKWebView` so page networking, cookies, JavaScript, downloads, and browser navigation use Apple's WebKit stack. App Sandbox needs outgoing network access through `com.apple.security.network.client`.
-
-## Authentication handling
-
-- Handle only an HTTP Basic authentication challenge whose protection space host exactly matches the configured OWU server.
-- Supply the Keychain credential with session persistence.
-- Never supply the OWU credential to another host or to a target-site authentication challenge.
-- On HTTP 401, clear the in-memory credential, return to the credential screen, and preserve the typed destination locally.
-- Provide an explicit “Forget proxy credential” action that deletes the Keychain item.
-
-The proxy remains responsible for stripping `Authorization` before upstream requests.
-
-## Navigation rules
-
-- Accept only `http` and `https` destination addresses.
-- Reject embedded usernames and passwords.
-- Add `https://` when the scheme is omitted.
-- Encode only `scheme://host[:port]` with Base64 URL encoding; keep the target path and query after the opaque origin token.
-- Load only the configured OWU origin in the main `WKWebView`.
-- Treat downloads, `mailto:`, `tel:`, and external application schemes as explicit user-confirmed handoffs.
-- Display the decoded destination hostname in app chrome even though the web view URL remains on OWU.
-
-## Privacy and storage
-
-- Store the OWU credential in Keychain with a service identifier scoped to the configured server.
-- Keep browsing history off by default.
-- Do not add analytics, crash payloads containing URLs, request-body logging, or cross-device sync.
-- Provide clear buttons for clearing WebKit website data and target cookies.
-- Log only coarse connection state in release builds.
-
-## Compatibility expectations
-
-The app inherits the web proxy's compatibility boundary. Server-rendered sites and conventional SPAs should work best. Strict CSP, OAuth redirect validation, CAPTCHA, DRM, Service Worker, target Basic Auth, certificate pinning, and JavaScript that hardcodes origin assumptions can fail. The app cannot make an incompatible rewrite proxy equivalent to a native network tunnel.
 
 ## Delivery milestones
 
-### M0 — Swift package and URL model
+### M1 — working fixed-resource tunnels (implemented)
 
-- SwiftUI macOS 14 target.
-- URL normalization and origin-token encoder shared with unit tests.
-- Acceptance: Unicode hostnames, ports, paths, queries, fragments, and invalid schemes have deterministic tests.
+- `/tunnel/{resource_id}` Go data plane.
+- Nginx WebSocket upgrade route.
+- loopback SSH and Minecraft listeners.
+- Keychain password and self-signed certificate pin.
+- unit tests plus a live SSH banner smoke test.
 
-### M1 — Authenticated WebKit shell
+Acceptance: external WSS smoke test returns the configured server's OpenSSH
+banner while requests without the tunnel key return `401` and unknown IDs return
+`404`.
 
-- Server setup, Keychain credential storage, Basic Auth challenge handling, and certificate policy.
-- Acceptance: a correct credential opens OWU; an incorrect credential returns to setup; the credential never appears in logs or preferences.
+### M2 — Mac/Xcode validation and resilience
 
-### M2 — Browser workflow
+- Build both Apple silicon and Intel archives in Xcode.
+- Validate certificate challenges on the current IP deployment.
+- Add exponential reconnect for active client flows.
+- Add sleep/wake recovery, network-change handling, idle timeouts, connection
+  counters, and clearer handshake failures.
+- Test concurrent SSH sessions and Minecraft login/play traffic.
 
-- Address bar, navigation controls, progress, error page, downloads, theme, and keyboard shortcuts.
-- Acceptance: browse through OWU across two sites, navigate within each site, return Home, and clear website data.
+Acceptance: 100 reconnect cycles, sleep/wake, and Wi-Fi changes complete without
+leaking listeners or credentials.
 
-### M3 — Hardening
+### M3 — resource catalog and custom local mappings
 
-- Exact-host credential scoping, pinned personal certificate option, normal public TLS path, process crash recovery, sleep/wake testing, and accessibility review.
-- Acceptance: authentication is never answered for a non-OWU host; an unexpected certificate fails closed.
+- Fetch a signed list of resource IDs, display names, and recommended local ports.
+- Let the owner change only local ports; remote destinations remain server-side.
+- Add resource health and latency probes.
+- Add a small Web tab that opens the existing `/browse/` UI in `WKWebView`.
 
-### M4 — Distribution
+Acceptance: adding a resource on the server makes it appear in the app without a
+new build; an unknown or modified remote target remains impossible from the Mac.
 
-- Developer ID signing, hardened runtime, notarization, update feed, rollback, and privacy documentation.
-- Acceptance: install and update on a clean Mac without Xcode; previous signed build remains recoverable.
+### M4 — packaging
 
-## Explicit non-goals for the first app
+- App Sandbox network client/server capabilities where required.
+- Hardened Runtime, Developer ID signing, notarization, stapling, update feed,
+  rollback, and privacy disclosures.
 
-- `NEPacketTunnelProvider` or system-wide routing.
-- Per-app VPN, SOCKS5, HTTP CONNECT, UDP, or arbitrary TCP forwarding.
-- Protocol camouflage or network-policy bypass.
-- Multi-user accounts, cloud history, shared credentials, or public proxy discovery.
+Acceptance: install, launch, update, and uninstall on a clean supported Mac
+without Xcode.
+
+### M5 — optional system integration
+
+- Evaluate `NEPacketTunnelProvider` only for resource-specific routing and split
+  DNS after entitlement approval.
+- Keep default routes and arbitrary destination forwarding disabled.
+- Add physical-Mac tests for route overlap, IPv4/IPv6, revocation, and clean
+  extension removal.
+
+## Verification matrix
+
+| Check | Expected result |
+|---|---|
+| Correct password + SSH resource | SSH banner over WSS |
+| Missing/wrong tunnel key | HTTP `401` |
+| Unknown resource ID | HTTP `404` |
+| Minecraft backend offline | connection fails, no fallback |
+| Wrong certificate pin | TLS challenge cancelled |
+| Listener inspection | only `127.0.0.1:2222/25565` |
+| Password storage | Keychain item; no password in URL/UserDefaults/logs |
 
 ## Apple references
 
-- `WKWebView`: https://developer.apple.com/documentation/webkit/wkwebview
-- `WKNavigationDelegate`: https://developer.apple.com/documentation/webkit/wknavigationdelegate
+- `NWListener`: https://developer.apple.com/documentation/network/nwlistener
+- `URLSessionWebSocketTask`: https://developer.apple.com/documentation/foundation/urlsessionwebsockettask
 - Keychain Services: https://developer.apple.com/documentation/security/keychain-services
-- App Sandbox outgoing network entitlement: https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.network.client
+- Network Extension: https://developer.apple.com/documentation/networkextension
 - Notarization: https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution

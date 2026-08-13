@@ -40,7 +40,17 @@ func TestProxyRewritesHTMLHeadersAndCookies(t *testing.T) {
 		t.Fatal("OWU proxy CSP was not installed")
 	}
 	body := recorder.Body.String()
-	for _, expected := range []string{browsePrefix + token + "/next?q=1", browsePrefix + token + "/dir/asset.png", browsePrefix + token + "/bg.png", "data-owu=\"bootstrap\""} {
+	for _, expected := range []string{
+		browsePrefix + token + "/next?q=1",
+		browsePrefix + token + "/dir/asset.png",
+		browsePrefix + token + "/bg.png",
+		"data-owu=\"bootstrap\"",
+		"MutationObserver",
+		"navigator.sendBeacon",
+		"window.Worker",
+		"patchURLProperty",
+		"CSSStyleSheet.prototype.insertRule",
+	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("rewritten body missing %q: %s", expected, body)
 		}

@@ -1,4 +1,4 @@
-# Permit MVP progress
+# OWU implementation progress
 
 This log tracks the durable implementation goal for the authorized-access MVP.
 
@@ -24,15 +24,23 @@ This log tracks the durable implementation goal for the authorized-access MVP.
 
 ## Current iteration
 
-The product interaction was simplified on 2026-08-13: there is no login, registration, or visible authorization step. Anonymous access is limited to operator-registered public resources; all other destinations fail closed.
+The personal OWU deployment is protected by browser Basic Auth. The web proxy now
+rewrites static and dynamically inserted page references. The macOS client has a
+working loopback TCP-to-WSS implementation for fixed `ssh` and `minecraft`
+resource IDs; arbitrary remote destinations are not accepted by the tunnel API.
 
 ## Verification evidence
 
-- `npm test`: production web build plus 8/8 Node tests passed.
+- `npm test`: production web build plus 3/3 Node tests passed.
 - `npx eslint app tests`: passed.
 - Go 1.23 container: `go test ./...` and `go vet ./...` passed; gateway image built successfully.
-- Swift 5.10 container: `swift test --parallel` passed 19/19 portable core tests.
+- Swift 5.10 container: `swift test` passed 22/22 portable core tests.
 - `docker compose up --build -d`: web, gateway, and internal demo target started; health checks passed.
 - `tests/e2e-demo.ps1`: single-input UI, same-origin BFF, one-time launch, proxied fixture response, and fail-closed denials passed.
 
-Apple-specific SwiftUI, Security.framework, Network.framework, signing, and entitlement branches remain a macOS/Xcode verification task and are not represented as complete production functionality.
+Live deployment smoke tests: unauthenticated web access `401`, proxied
+`example.com` `200`, loopback target `403`, missing tunnel key `401`, unknown
+tunnel ID `404`, and the configured SSH tunnel returned
+`SSH-2.0-OpenSSH_8.0`. Apple-specific SwiftUI, Security.framework, and
+Network.framework branches still require compilation and lifecycle tests in
+Xcode on a physical Mac.
