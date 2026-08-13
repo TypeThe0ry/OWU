@@ -8,29 +8,29 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .library(name: "PermitCore", targets: ["PermitCore"]),
-        .library(name: "PermitMacPlatform", targets: ["PermitMacPlatform"]),
-        .executable(name: "OWU", targets: ["PermitApp"])
+        .library(name: "OWUCore", targets: ["OWUCore"]),
+        .library(name: "OWUMacPlatform", targets: ["OWUMacPlatform"]),
+        .executable(name: "OWU", targets: ["OWUApp"])
     ],
     targets: [
         .target(
-            name: "PermitCore"
+            name: "OWUCore"
         ),
         .target(
-            name: "PermitMacPlatform",
-            dependencies: ["PermitCore"],
+            name: "OWUMacPlatform",
+            dependencies: ["OWUCore"],
             linkerSettings: [
                 .linkedFramework("Security", .when(platforms: [.macOS])),
                 .linkedFramework("Network", .when(platforms: [.macOS]))
             ]
         ),
         .executableTarget(
-            name: "PermitApp",
-            dependencies: ["PermitCore", "PermitMacPlatform"]
+            name: "OWUApp",
+            dependencies: ["OWUCore", "OWUMacPlatform"]
         ),
         .testTarget(
-            name: "PermitCoreTests",
-            dependencies: ["PermitCore"]
+            name: "OWUCoreTests",
+            dependencies: ["OWUCore"]
         )
     ],
     swiftLanguageVersions: [.v5]

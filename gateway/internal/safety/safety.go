@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 var ErrUnsafeDestination = errors.New("destination resolved to a prohibited network address")
@@ -35,6 +36,10 @@ type Policy struct {
 }
 
 func (p Policy) Resolve(ctx context.Context, scheme, host string, port int) ([]netip.Addr, error) {
+	host = canonicalHost(host)
+	if host == "" {
+		return nil, errors.New("target hostname is empty")
+	}
 	resolver := p.Resolver
 	if resolver == nil {
 		resolver = NetResolver{}
@@ -66,14 +71,15 @@ func (p Policy) Resolve(ctx context.Context, scheme, host string, port int) ([]n
 
 func (p Policy) DialContext(ctx context.Context, network, address, scheme, expectedHost string, expectedPort int) (net.Conn, error) {
 	host, portText, err := net.SplitHostPort(address)
-	if err != nil || !strings.EqualFold(strings.TrimSuffix(host, "."), expectedHost) || portText != strconv.Itoa(expectedPort) {
+	expectedHost = canonicalHost(expectedHost)
+	if err != nil || canonicalHost(host) != expectedHost || portText != strconv.Itoa(expectedPort) {
 		return nil, errors.New("upstream dial target did not match the authorized resource")
 	}
 	addresses, err := p.Resolve(ctx, scheme, expectedHost, expectedPort)
 	if err != nil {
 		return nil, err
 	}
-	dialer := net.Dialer{}
+	dialer := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	var errs []error
 	for _, ip := range addresses {
 		connection, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), portText))
@@ -83,6 +89,10 @@ func (p Policy) DialContext(ctx context.Context, network, address, scheme, expec
 		errs = append(errs, dialErr)
 	}
 	return nil, errors.Join(errs...)
+}
+
+func canonicalHost(host string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 }
 
 func prohibited(address netip.Addr) bool {

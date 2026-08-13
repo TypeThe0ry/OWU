@@ -12,8 +12,8 @@ Default listeners:
 | `minecraft` | `127.0.0.1:25565` | Minecraft server `127.0.0.1:25565` |
 
 The gateway resolves these IDs from `OWU_TCP_RESOURCES`; the Mac never sends an
-arbitrary destination. Nginx Basic Auth and `X-OWU-Tunnel-Key` use the same
-owner password, which the app stores in Keychain. A self-signed deployment is
+arbitrary destination. The app stores its tunnel key in Keychain. Keep that key
+independent from the Nginx Basic Auth password. A self-signed deployment is
 supported by an explicit leaf-certificate SHA-256 pin.
 
 ## Build
@@ -34,15 +34,16 @@ loopback listeners. A future system-wide, resource-only mode remains a separate
 
 ## Server configuration
 
-Copy `deploy/owu-proxy.env.example` to `/etc/owu/owu-proxy.env`, replace the
-password, configure exact destinations, set mode `0600`, then restart the Go
-proxy and reload Nginx. Do not publish `/tunnel/` without both Nginx Basic Auth
-and the tunnel-key check.
+Copy `deploy/owu-proxy.env.example` to `/etc/owu/owu-proxy.env`, set a dedicated
+`OWU_TUNNEL_KEY`, configure exact destinations, set mode `0600`, then restart
+the Go proxy and reload Nginx. Keep the Nginx Basic Auth password separate from
+the tunnel key; enter both in the app and store the server fingerprint only for
+self-signed deployments.
 
 ## Verification
 
 1. Start `ssh`; `lsof -nP -iTCP:2222 -sTCP:LISTEN` must show only `127.0.0.1`.
 2. Run `ssh -p 2222 user@127.0.0.1` and verify the remote server fingerprint.
 3. Start `minecraft`; connect to `127.0.0.1:25565`.
-4. Enter a wrong password or wrong certificate pin; the connection must fail.
+4. Enter a wrong browser password, tunnel key, or certificate pin; the connection must fail.
 5. Change a resource ID to an unknown value; the server must return `404`.

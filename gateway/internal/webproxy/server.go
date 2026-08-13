@@ -1,6 +1,7 @@
 package webproxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -19,6 +21,8 @@ import (
 	"time"
 
 	"permit-gateway/internal/safety"
+
+	"golang.org/x/net/html/charset"
 )
 
 const (
@@ -108,13 +112,16 @@ func (s *Server) handleRefererFallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found.")
 		return
 	}
-	base, token, err := parseProxyTarget(referer, browsePrefix, map[string]bool{"http": true, "https": true})
+	base, _, err := parseProxyTarget(referer, browsePrefix, map[string]bool{"http": true, "https": true})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "Not found.")
 		return
 	}
 	target := &url.URL{Scheme: base.Scheme, Host: base.Host, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
-	s.proxyHTTP(w, r, target, token)
+	// Canonicalize root-relative navigations and module/resource requests back
+	// under /browse/{origin}. Keeping the proxy token in the visible URL makes
+	// subsequent relative requests deterministic even after JS location changes.
+	http.Redirect(w, r, proxyURL(target), http.StatusTemporaryRedirect)
 }
 
 func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, target *url.URL, token string) {
@@ -122,12 +129,16 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, target *url.U
 		writeError(w, http.StatusRequestEntityTooLarge, "The request body is too large.")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-	defer cancel()
-	if err := s.validateTarget(ctx, target); err != nil {
+	// Bound connection establishment and response headers, but do not impose a
+	// two-minute deadline on a successfully established SSE stream or download.
+	validationCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	if err := s.validateTarget(validationCtx, target); err != nil {
+		cancel()
 		writeError(w, http.StatusForbidden, "This destination is not a public Internet address.")
 		return
 	}
+	cancel()
+	ctx := r.Context()
 
 	body := http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	outbound, err := http.NewRequestWithContext(ctx, r.Method, target.String(), body)
@@ -138,7 +149,7 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, target *url.U
 	copyRequestHeaders(outbound.Header, r.Header)
 	outbound.Host = target.Host
 	setTargetCookies(outbound, r, token)
-	rewriteRequestOrigin(outbound, r, target)
+	rewriteRequestOrigin(outbound, r)
 
 	transport := s.transportFor(target)
 	defer transport.CloseIdleConnections()
@@ -186,7 +197,7 @@ func (s *Server) handleSocket(w http.ResponseWriter, r *http.Request) {
 			request.Out.Header = make(http.Header)
 			copyRequestHeaders(request.Out.Header, request.In.Header)
 			setTargetCookies(request.Out, request.In, encodeOrigin(&mapped))
-			rewriteRequestOrigin(request.Out, request.In, &mapped)
+			rewriteRequestOrigin(request.Out, request.In)
 			request.Out.Header.Set("Connection", "Upgrade")
 			request.Out.Header.Set("Upgrade", "websocket")
 		},
@@ -278,12 +289,31 @@ func decodeOrigin(token string, schemes map[string]bool) (*url.URL, error) {
 	if targetPort(origin) < 1 || targetPort(origin) > 65535 {
 		return nil, errors.New("invalid port")
 	}
+	canonicalizeOrigin(origin)
 	return origin, nil
 }
 
 func encodeOrigin(target *url.URL) string {
-	origin := target.Scheme + "://" + target.Host
+	copy := *target
+	canonicalizeOrigin(&copy)
+	origin := copy.Scheme + "://" + copy.Host
 	return base64.RawURLEncoding.EncodeToString([]byte(origin))
+}
+
+func canonicalizeOrigin(target *url.URL) {
+	target.Scheme = strings.ToLower(target.Scheme)
+	host := strings.ToLower(strings.TrimSuffix(target.Hostname(), "."))
+	port := target.Port()
+	if (target.Scheme == "https" || target.Scheme == "wss") && port == "443" || (target.Scheme == "http" || target.Scheme == "ws") && port == "80" {
+		port = ""
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port != "" {
+		host = net.JoinHostPort(strings.Trim(host, "[]"), port)
+	}
+	target.Host = host
 }
 
 func targetPort(target *url.URL) int {
@@ -301,7 +331,11 @@ func targetPort(target *url.URL) int {
 }
 
 func proxyURL(target *url.URL) string {
-	result := browsePrefix + encodeOrigin(target) + target.EscapedPath()
+	path := target.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	result := browsePrefix + encodeOrigin(target) + path
 	if target.RawQuery != "" {
 		result += "?" + target.RawQuery
 	}
@@ -314,7 +348,7 @@ func proxyURL(target *url.URL) string {
 func copyRequestHeaders(destination, source http.Header) {
 	for name, values := range source {
 		lower := strings.ToLower(name)
-		if lower == "authorization" || lower == "cookie" || lower == "host" || lower == "accept-encoding" || lower == "connection" || lower == "proxy-connection" || lower == "upgrade" || lower == "te" || lower == "trailer" || lower == "transfer-encoding" || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "proxy-") {
+		if lower == "authorization" || lower == "cookie" || lower == "host" || lower == "accept-encoding" || lower == "connection" || lower == "proxy-connection" || lower == "upgrade" || lower == "te" || lower == "trailer" || lower == "transfer-encoding" || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "proxy-") || strings.HasPrefix(lower, "sec-fetch-") {
 			continue
 		}
 		for _, value := range values {
@@ -338,14 +372,26 @@ func setTargetCookies(outbound, incoming *http.Request, token string) {
 	}
 }
 
-func rewriteRequestOrigin(outbound, incoming *http.Request, target *url.URL) {
-	targetOrigin := target.Scheme + "://" + target.Host
+func rewriteRequestOrigin(outbound, incoming *http.Request) {
+	source, ok := proxiedRefererTarget(incoming.Referer())
+	if !ok {
+		outbound.Header.Del("Origin")
+		outbound.Header.Del("Referer")
+		return
+	}
 	if incoming.Header.Get("Origin") != "" {
-		outbound.Header.Set("Origin", targetOrigin)
+		outbound.Header.Set("Origin", source.Scheme+"://"+source.Host)
 	}
-	if incoming.Referer() != "" {
-		outbound.Header.Set("Referer", targetOrigin+target.EscapedPath())
+	outbound.Header.Set("Referer", source.String())
+}
+
+func proxiedRefererTarget(value string) (*url.URL, bool) {
+	referer, err := url.Parse(value)
+	if err != nil || !strings.HasPrefix(referer.Path, browsePrefix) {
+		return nil, false
 	}
+	target, _, err := parseProxyTarget(referer, browsePrefix, map[string]bool{"http": true, "https": true})
+	return target, err == nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -361,8 +407,9 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func writeProxyResponse(w http.ResponseWriter, incoming *http.Request, response *http.Response, target *url.URL, token string) error {
 	contentType := strings.ToLower(response.Header.Get("Content-Type"))
-	rewriteHTMLBody := strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml")
-	rewriteCSSBody := strings.Contains(contentType, "text/css")
+	partialResponse := response.StatusCode == http.StatusPartialContent || response.Header.Get("Content-Range") != ""
+	rewriteHTMLBody := !partialResponse && (strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml"))
+	rewriteCSSBody := !partialResponse && strings.Contains(contentType, "text/css")
 
 	copyResponseHeaders(w.Header(), response.Header)
 	rewriteResponseHeaders(w.Header(), response, target, token, incoming.Header.Get("X-Forwarded-Proto") == "https")
@@ -377,10 +424,15 @@ func writeProxyResponse(w http.ResponseWriter, incoming *http.Request, response 
 			return errors.New("rewritable response body is too large")
 		}
 		if rewriteHTMLBody {
+			body, err = decodeHTMLToUTF8(body, response.Header.Get("Content-Type"))
+			if err != nil {
+				return err
+			}
 			body, err = rewriteHTML(body, target)
 			if err != nil {
 				return err
 			}
+			w.Header().Set("Content-Type", utf8ContentType(response.Header.Get("Content-Type")))
 			w.Header().Set("Content-Security-Policy", proxyContentSecurityPolicy)
 		} else {
 			body = rewriteCSS(body, target)
@@ -400,7 +452,31 @@ func writeProxyResponse(w http.ResponseWriter, incoming *http.Request, response 
 	return err
 }
 
-const proxyContentSecurityPolicy = "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; style-src 'self' 'unsafe-inline' data: blob:; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' data: blob:; frame-src 'self' data: blob:; form-action 'self'; object-src 'none'; base-uri 'none'; navigate-to 'self'"
+func decodeHTMLToUTF8(body []byte, contentType string) ([]byte, error) {
+	reader, err := charset.NewReader(bytes.NewReader(body), contentType)
+	if err != nil {
+		return nil, err
+	}
+	decoded, err := io.ReadAll(io.LimitReader(reader, maxRewriteBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(decoded) > maxRewriteBodyBytes {
+		return nil, errors.New("decoded HTML response body is too large")
+	}
+	return decoded, nil
+}
+
+func utf8ContentType(contentType string) string {
+	mediaType, parameters, err := mime.ParseMediaType(contentType)
+	if err != nil || mediaType == "" {
+		return "text/html; charset=utf-8"
+	}
+	parameters["charset"] = "utf-8"
+	return mime.FormatMediaType(mediaType, parameters)
+}
+
+const proxyContentSecurityPolicy = "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; style-src 'self' 'unsafe-inline' data: blob:; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' data: blob:; frame-src 'self' data: blob:; form-action 'self'; object-src 'none'; base-uri 'self'; navigate-to 'self'"
 
 func copyResponseHeaders(destination, source http.Header) {
 	blocked := map[string]bool{
@@ -409,7 +485,8 @@ func copyResponseHeaders(destination, source http.Header) {
 		"content-security-policy": true, "content-security-policy-report-only": true, "x-frame-options": true,
 		"cross-origin-opener-policy": true, "cross-origin-embedder-policy": true, "cross-origin-resource-policy": true,
 		"origin-agent-cluster": true, "clear-site-data": true, "strict-transport-security": true, "link": true,
-		"www-authenticate": true, "access-control-allow-origin": true, "access-control-allow-credentials": true,
+		"service-worker-allowed": true,
+		"www-authenticate":       true, "access-control-allow-origin": true, "access-control-allow-credentials": true,
 	}
 	for name, values := range source {
 		if blocked[strings.ToLower(name)] {
@@ -423,7 +500,10 @@ func copyResponseHeaders(destination, source http.Header) {
 
 func rewriteResponseHeaders(headers http.Header, response *http.Response, target *url.URL, token string, secure bool) {
 	headers.Set("Cache-Control", "private, no-store")
-	headers.Set("Referrer-Policy", "no-referrer")
+	// same-origin exposes only the OWU route to OWU itself. It is required for
+	// the canonical fallback of root-relative module and runtime requests; the
+	// outbound proxy rewrites the value to the target origin before forwarding.
+	headers.Set("Referrer-Policy", "same-origin")
 	if location := response.Header.Get("Location"); location != "" {
 		if resolved, err := target.Parse(location); err == nil && (resolved.Scheme == "http" || resolved.Scheme == "https") {
 			headers.Set("Location", proxyURL(resolved))

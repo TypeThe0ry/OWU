@@ -2,7 +2,7 @@
 import CryptoKit
 import Foundation
 import Network
-import PermitCore
+import OWUCore
 import Security
 
 public final class WebSocketLoopbackTunnel: @unchecked Sendable {

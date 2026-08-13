@@ -9,6 +9,7 @@ User=www
 Group=www
 WorkingDirectory=/www/wwwroot/owu/current
 Environment=NODE_ENV=production
+Environment=NEXT_PUBLIC_OWU_BASE_URL=https://owu.example.com
 Environment=WRANGLER_LOG_PATH=/tmp/owu-wrangler.log
 Environment=PATH=/usr/local/lib/owu-node:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 ExecStart=/usr/local/lib/owu-node/node node_modules/vinext/dist/cli.js start --hostname 127.0.0.1 --port 3210

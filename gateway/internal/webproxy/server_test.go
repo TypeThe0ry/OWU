@@ -50,6 +50,7 @@ func TestProxyRewritesHTMLHeadersAndCookies(t *testing.T) {
 		"window.Worker",
 		"patchURLProperty",
 		"CSSStyleSheet.prototype.insertRule",
+		"text.startsWith(browsePrefix)",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("rewritten body missing %q: %s", expected, body)
@@ -87,5 +88,22 @@ func TestProxyBlocksLoopbackWithoutTestException(t *testing.T) {
 	server.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", recorder.Code)
+	}
+}
+
+func TestRefererFallbackRedirectsToCanonicalBrowseRoute(t *testing.T) {
+	server := New(Config{})
+	target, _ := url.Parse("https://example.com/app/page")
+	request := httptest.NewRequest(http.MethodGet, "/runtime-chunk.js?v=1", nil)
+	request.Header.Set("Referer", "https://owu.example"+proxyURL(target))
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want 307", recorder.Code)
+	}
+	want := proxyURL(mustURL(t, "https://example.com/runtime-chunk.js?v=1"))
+	if got := recorder.Header().Get("Location"); got != want {
+		t.Fatalf("Location = %q, want %q", got, want)
 	}
 }

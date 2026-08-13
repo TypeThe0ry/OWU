@@ -1,6 +1,20 @@
-<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M22 19.2727C22 20.779 20.779 22 19.2727 22H14.7273C13.221 22 12 20.779 12 19.2727V12H19.2727C20.779 12 22 13.221 22 14.7273V19.2727Z" fill="#68C4FF"/>
-<path d="M20 2C21.1046 2 22 2.89543 22 4V7C22 8.10457 21.1046 9 20 9H17C15.8954 9 15 8.10457 15 7V4C15 2.89543 15.8954 2 17 2H20Z" fill="#0C79D8"/>
-<path d="M7 15C8.10457 15 9 15.8954 9 17V20C9 21.1046 8.10457 22 7 22H4C2.89543 22 2 21.1046 2 20V17C2 15.8954 2.89543 15 4 15H7Z" fill="#0C79D8"/>
-<path d="M12 12H4.72727C3.22104 12 2 10.779 2 9.27273V4.72727C2 3.22104 3.22104 2 4.72727 2H9.27273C10.779 2 12 3.22104 12 4.72727V12Z" fill="#2E9EFF"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">OWU</title>
+  <defs>
+    <linearGradient id="surface" x1="8" y1="5" x2="58" y2="61" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4F6BFF"/>
+      <stop offset="0.52" stop-color="#6D4AFF"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(15 10) rotate(47) scale(49)">
+      <stop stop-color="#8FE7FF" stop-opacity="0.66"/>
+      <stop offset="1" stop-color="#8FE7FF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#surface)"/>
+  <rect width="64" height="64" rx="16" fill="url(#glow)"/>
+  <path d="m25.5 38.5-4.2 4.2a8.1 8.1 0 0 0 11.5 11.5l8.8-8.8a8.1 8.1 0 0 0 0-11.5" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+  <path d="m38.5 25.5 4.2-4.2a8.1 8.1 0 0 0-11.5-11.5l-8.8 8.8a8.1 8.1 0 0 0 0 11.5" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+  <path d="m24.5 39.5 15-15" fill="none" stroke="#DDF8FF" stroke-width="5" stroke-linecap="round"/>
+  <path d="M15 3.5h34" stroke="#fff" stroke-opacity="0.24" stroke-width="2" stroke-linecap="round"/>
 </svg>

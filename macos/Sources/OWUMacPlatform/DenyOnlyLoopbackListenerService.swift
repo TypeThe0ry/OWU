@@ -1,7 +1,7 @@
 #if os(macOS)
 import Foundation
 import Network
-import PermitCore
+import OWUCore
 
 /// A fail-closed listener scaffold. It proves loopback-only binding and lifecycle wiring,
 /// but deliberately closes every accepted connection until protocol parsers, rotating
@@ -11,7 +11,7 @@ public actor DenyOnlyLoopbackListenerService: LocalProxyServicing {
     private var listeners: [NWListener] = []
     private var readyListenerCount = 0
     private var proxyState: LocalProxyState = .stopped
-    private let queue = DispatchQueue(label: "com.permit.access-client.loopback-listeners")
+    private let queue = DispatchQueue(label: "app.owu.mac-client.loopback-listeners")
 
     public init(configurations: [LoopbackListenerConfiguration]) {
         self.configurations = configurations

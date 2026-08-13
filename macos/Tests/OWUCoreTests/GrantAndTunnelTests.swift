@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import PermitCore
+@testable import OWUCore
 
 final class GrantAndTunnelTests: XCTestCase {
     func testGrantMustMatchDeviceResourceEndpointAndAudience() throws {

@@ -1,14 +1,15 @@
 #if os(macOS)
 import Combine
 import Foundation
-import PermitCore
-import PermitMacPlatform
+import OWUCore
+import OWUMacPlatform
 
 @MainActor
 final class AppModel: ObservableObject {
     @Published var serverAddress: String
     @Published var username: String
-    @Published var password = ""
+    @Published var browserPassword = ""
+    @Published var tunnelKey = ""
     @Published var certificateFingerprint: String
     @Published private(set) var states: [String: OWUTunnelState] = [:]
     @Published var notice: String?
@@ -19,12 +20,11 @@ final class AppModel: ObservableObject {
     private var tunnels: [String: WebSocketLoopbackTunnel] = [:]
 
     init() {
-        serverAddress = defaults.string(forKey: "owu.server") ?? "https://8.219.11.175"
+        serverAddress = defaults.string(forKey: "owu.server") ?? "https://owu.example.com"
         username = defaults.string(forKey: "owu.username") ?? "owu"
-        certificateFingerprint = defaults.string(forKey: "owu.certificateSHA256")
-            ?? "A4:03:FF:0C:22:E8:E5:03:18:97:D1:53:6E:B7:B8:C0:68:BB:16:15:2E:C6:8B:BF:C4:45:7A:2C:76:A6:EC:E2"
+        certificateFingerprint = defaults.string(forKey: "owu.certificateSHA256") ?? ""
         for preset in presets { states[preset.id] = .stopped }
-        loadSavedPassword()
+        loadSavedCredentials()
     }
 
     func state(for preset: OWUTunnelPreset) -> OWUTunnelState {
@@ -71,7 +71,8 @@ final class AppModel: ObservableObject {
         return try OWUServerConfiguration(
             baseURL: url,
             username: username,
-            password: password,
+            browserPassword: browserPassword,
+            tunnelKey: tunnelKey,
             certificateSHA256: certificateFingerprint
         )
     }
@@ -82,19 +83,38 @@ final class AppModel: ObservableObject {
         defaults.set(certificateFingerprint, forKey: "owu.certificateSHA256")
         do {
             try credentialStore.save(
-                password: configuration.password,
+                secret: configuration.browserPassword,
+                kind: .browserPassword,
+                serverHost: configuration.baseURL.host ?? "",
+                username: configuration.username
+            )
+            try credentialStore.save(
+                secret: configuration.tunnelKey,
+                kind: .tunnelKey,
                 serverHost: configuration.baseURL.host ?? "",
                 username: configuration.username
             )
         } catch {
-            notice = "The tunnel started, but the password could not be saved to Keychain."
+            notice = "The tunnel started, but its credentials could not be saved to Keychain."
         }
     }
 
-    private func loadSavedPassword() {
+    private func loadSavedCredentials() {
         guard let host = URL(string: serverAddress)?.host else { return }
-        do { password = try credentialStore.load(serverHost: host, username: username) ?? "" }
-        catch { notice = "The saved password could not be read from Keychain." }
+        do {
+            browserPassword = try credentialStore.load(
+                kind: .browserPassword,
+                serverHost: host,
+                username: username
+            ) ?? ""
+            tunnelKey = try credentialStore.load(
+                kind: .tunnelKey,
+                serverHost: host,
+                username: username
+            ) ?? ""
+        } catch {
+            notice = "The saved credentials could not be read from Keychain."
+        }
     }
 }
 #endif

@@ -1,7 +1,7 @@
 #if os(macOS)
 import CryptoKit
 import Foundation
-import PermitCore
+import OWUCore
 import Security
 
 public actor KeychainDeviceIdentityProvider: DeviceIdentityProviding {
@@ -10,7 +10,7 @@ public actor KeychainDeviceIdentityProvider: DeviceIdentityProviding {
     private let accessGroup: String?
 
     public init(
-        applicationTag: String = "com.permit.access-client.device-key",
+        applicationTag: String = "app.owu.mac-client.device-key",
         accessGroup: String? = nil
     ) {
         self.applicationTag = Data(applicationTag.utf8)

@@ -48,3 +48,13 @@ func TestResolveSafetyPolicy(t *testing.T) {
 		t.Fatalf("loopback should remain blocked in demo mode: %v", err)
 	}
 }
+
+func TestResolveCanonicalizesHostCaseAndTrailingDot(t *testing.T) {
+	resolver := staticResolver{
+		"public.example": {netip.MustParseAddr("93.184.216.34")},
+	}
+	policy := Policy{Resolver: resolver}
+	if _, err := policy.Resolve(context.Background(), "https", " PUBLIC.Example. ", 443); err != nil {
+		t.Fatalf("canonical public hostname was rejected: %v", err)
+	}
+}

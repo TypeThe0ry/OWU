@@ -20,7 +20,7 @@ import Foundation
 @main
 enum OWUMacClientUnsupportedHost {
     static func main() {
-        print("OWU requires macOS 14 or later. Run swift test to verify PermitCore on this host.")
+        print("OWU requires macOS 14 or later. Run swift test to verify OWUCore on this host.")
     }
 }
 #endif

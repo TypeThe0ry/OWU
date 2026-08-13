@@ -27,7 +27,7 @@ services:
   gateway:
     build:
       context: gateway
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.permit-demo
     environment:
       PERMIT_DEMO_MODE: "true"
       PERMIT_DEMO_TARGET_ORIGIN: http://demo-target:9000

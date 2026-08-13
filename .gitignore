@@ -1,7 +1,5 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
-/node_modules
+# JavaScript dependencies and package-manager state
+/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -10,36 +8,50 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
-
-# next.js
+# Build, test, and local runtime output
 /.next/
 /.vinext/
+/.wrangler/
+/dist/
 /out/
+/coverage/
+/outputs/
+/work/
+/.dev.pid
+/dev.log
+/dev.err.log
+*.tsbuildinfo
 
-# misc
-.DS_Store
+# SwiftPM and Xcode user state
+/.build/
+/macos/.build/
+/.swiftpm/
+**/xcuserdata/
+**/DerivedData/
+
+# Local configuration and credentials. Examples remain tracked.
+.env
+.env.*
+!.env.example
+!**/*.env.example
 *.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.htpasswd
+known_hosts
 
-# debug
+# Logs, editors, and operating-system metadata
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
 
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-/dist/
-/.wrangler/
-/outputs/
-/work/
-.build/
-macos/.build/
-.dev.pid
-dev.log
-dev.err.log
+# Provider-specific local state
+.vercel/

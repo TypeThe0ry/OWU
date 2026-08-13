@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -13,13 +13,27 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://8.219.11.175"),
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_OWU_BASE_URL ?? "https://owu.example.com",
+  ),
+  applicationName: "OWU",
   title: "OWU — Open Website Unblocker",
   description:
     "A browser-password protected personal web proxy.",
+  manifest: "/manifest.webmanifest",
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+  appleWebApp: {
+    capable: true,
+    title: "OWU",
+    statusBarStyle: "black-translucent",
   },
   openGraph: {
     title: "OWU — Open Website Unblocker",
@@ -32,6 +46,14 @@ export const metadata: Metadata = {
     description: "Your private browser-based web proxy.",
     images: ["/og.png"],
   },
+};
+
+export const viewport: Viewport = {
+  colorScheme: "light dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#F7F8FF" },
+    { media: "(prefers-color-scheme: dark)", color: "#070916" },
+  ],
 };
 
 const themeInitScript = `try{const saved=localStorage.getItem("owu-theme");const theme=saved==="light"||saved==="dark"?saved:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=theme}catch{}`;

@@ -1,5 +1,5 @@
 #if os(macOS)
-import PermitCore
+import OWUCore
 import SwiftUI
 
 struct ContentView: View {
@@ -65,13 +65,15 @@ struct ContentView: View {
             HStack {
                 TextField("Username", text: $model.username)
                     .textFieldStyle(.roundedBorder)
-                SecureField("Password", text: $model.password)
+                SecureField("Browser password", text: $model.browserPassword)
                     .textFieldStyle(.roundedBorder)
             }
+            SecureField("Independent tunnel key", text: $model.tunnelKey)
+                .textFieldStyle(.roundedBorder)
             TextField("TLS certificate SHA-256 fingerprint (optional for public certificates)", text: $model.certificateFingerprint)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.body, design: .monospaced))
-            Text("The password is saved in Keychain. The fingerprint pins a self-signed OWU certificate.")
+            Text("Both credentials are stored separately in Keychain. The tunnel key must differ from the browser password. The fingerprint optionally pins a self-signed OWU certificate.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -99,7 +101,7 @@ struct ContentView: View {
                     Text(preset.name).font(.headline)
                     statusLabel(state)
                 }
-                Text("127.0.0.1:\(preset.localPort)")
+                Text(preset.localResourceURL.absoluteString)
                     .font(.system(.body, design: .monospaced))
                 Text(preset.usage)
                     .font(.caption)
@@ -109,7 +111,7 @@ struct ContentView: View {
             Spacer()
             Button(buttonTitle(state)) { model.toggle(preset) }
                 .buttonStyle(.borderedProminent)
-                .tint(isRunning(state) ? .red : .accentColor)
+                .tint(state.isActive ? .red : .accentColor)
                 .controlSize(.large)
         }
         .glassCard()
@@ -133,18 +135,8 @@ struct ContentView: View {
         .foregroundStyle(.secondary)
     }
 
-    private func isRunning(_ state: OWUTunnelState) -> Bool {
-        switch state { case .starting, .ready: return true; default: return false }
-    }
-    private func buttonTitle(_ state: OWUTunnelState) -> String { isRunning(state) ? "Stop" : "Start" }
-    private func statusText(_ state: OWUTunnelState) -> String {
-        switch state {
-        case .stopped: return "Stopped"
-        case .starting: return "Starting"
-        case .ready: return "Ready"
-        case .failed: return "Failed"
-        }
-    }
+    private func buttonTitle(_ state: OWUTunnelState) -> String { state.isActive ? "Stop" : "Start" }
+    private func statusText(_ state: OWUTunnelState) -> String { state.label }
     private func statusColor(_ state: OWUTunnelState) -> Color {
         switch state {
         case .ready: return .green

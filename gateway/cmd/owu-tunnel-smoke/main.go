@@ -17,14 +17,15 @@ func main() {
 	endpoint := strings.TrimSpace(os.Getenv("OWU_SMOKE_URL"))
 	username := strings.TrimSpace(os.Getenv("OWU_SMOKE_USERNAME"))
 	password := os.Getenv("OWU_SMOKE_PASSWORD")
-	if endpoint == "" || username == "" || password == "" {
-		fmt.Fprintln(os.Stderr, "OWU_SMOKE_URL, OWU_SMOKE_USERNAME, and OWU_SMOKE_PASSWORD are required")
+	tunnelKey := os.Getenv("OWU_SMOKE_TUNNEL_KEY")
+	if endpoint == "" || username == "" || password == "" || tunnelKey == "" {
+		fmt.Fprintln(os.Stderr, "OWU_SMOKE_URL, OWU_SMOKE_USERNAME, OWU_SMOKE_PASSWORD, and OWU_SMOKE_TUNNEL_KEY are required")
 		os.Exit(2)
 	}
 
 	headers := http.Header{}
 	headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
-	headers.Set("X-OWU-Tunnel-Key", password)
+	headers.Set("X-OWU-Tunnel-Key", tunnelKey)
 	httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: os.Getenv("OWU_SMOKE_INSECURE") == "true", // test client for the IP/self-signed deployment

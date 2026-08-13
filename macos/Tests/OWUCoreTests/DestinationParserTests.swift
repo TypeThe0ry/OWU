@@ -1,5 +1,5 @@
 import XCTest
-@testable import PermitCore
+@testable import OWUCore
 
 final class DestinationParserTests: XCTestCase {
     private let parser = DestinationParser()

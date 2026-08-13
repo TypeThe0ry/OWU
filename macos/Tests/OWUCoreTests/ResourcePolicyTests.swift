@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import PermitCore
+@testable import OWUCore
 
 final class ResourcePolicyTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 2_000_000_000)
