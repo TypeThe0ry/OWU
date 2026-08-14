@@ -73,7 +73,21 @@ struct ContentView: View {
             TextField("TLS certificate SHA-256 fingerprint (optional for public certificates)", text: $model.certificateFingerprint)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.body, design: .monospaced))
-            Text("Both credentials are stored separately in Keychain. The tunnel key must differ from the browser password. The fingerprint optionally pins a self-signed OWU certificate.")
+            TextField("Additional fallback ports, for example 8443, 9443", text: $model.additionalGatewayPorts)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+                .accessibilityLabel("Additional OWU gateway fallback ports")
+            HStack(spacing: 8) {
+                gatewayPortBadge("443", primary: true)
+                Image(systemName: "arrow.right")
+                gatewayPortBadge("80")
+                Image(systemName: "arrow.right")
+                gatewayPortBadge("8080")
+                Text("then extra ports")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text("Both credentials are stored separately in Keychain. The tunnel key must differ from the browser password. Every gateway attempt uses TLS-protected WSS; the server must expose the same OWU certificate and tunnel route on each enabled port.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -136,6 +150,16 @@ struct ContentView: View {
     }
 
     private func buttonTitle(_ state: OWUTunnelState) -> String { state.isActive ? "Stop" : "Start" }
+
+    private func gatewayPortBadge(_ value: String, primary: Bool = false) -> some View {
+        Text(value)
+            .font(.caption.monospaced().weight(.semibold))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background((primary ? Color.accentColor : Color.secondary).opacity(0.13), in: Capsule())
+            .foregroundStyle(primary ? Color.accentColor : Color.secondary)
+    }
+
     private func statusText(_ state: OWUTunnelState) -> String { state.label }
     private func statusColor(_ state: OWUTunnelState) -> Color {
         switch state {

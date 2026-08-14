@@ -34,13 +34,18 @@ traffic.
 ## Architecture
 
 ```text
-Browser -- HTTPS + Basic Auth --+
-                                |
-macOS loopback TCP -- WSS ------+--> Nginx :443
-                                      |-- /                 -> Vinext UI :3210
-                                      |-- /browse/*         -> Go proxy :3211
-                                      |-- /socket/*         -> Go WS proxy :3211
-                                      `-- /tunnel/{id}      -> fixed TCP target
+Browser -- HTTPS + Basic Auth --------+
+                                      |
+macOS loopback TCP -- WSS ------------+--> Nginx TLS edge
+                                           :443  primary
+                                           :8080 fallback
+                                           :8443 additional fallback
+                                           :9443 additional fallback
+                                           :80   dedicated-address profile only
+                                             |-- /             -> Vinext UI :3210
+                                             |-- /browse/*     -> Go proxy :3211
+                                             |-- /socket/*     -> Go WS proxy :3211
+                                             `-- /tunnel/{id}  -> fixed TCP target
 ```
 
 The web proxy encodes only the destination **origin** in the OWU route. The Go
@@ -148,6 +153,20 @@ The checked-in web proxy intentionally has no environment switch that enables
 private, loopback, link-local, or cloud-metadata browser destinations. TCP
 resources are the explicit server-side path for private services.
 
+Public listener ports are configured at Nginx, not in the Go environment file.
+The checked-in profiles keep every TCP tunnel on TLS/WSS because both Basic
+Auth and `X-OWU-Tunnel-Key` are credentials:
+
+| Profile | `443` | `8080` | `8443`, `9443` | `80` |
+|---|---|---|---|---|
+| `deploy/nginx-owu.conf` | HTTPS/WSS primary | HTTPS/WSS fallback | HTTPS/WSS fallback | HTTP redirect only |
+| `deploy/nginx-owu-dedicated-port80-tls.conf` | HTTPS/WSS primary | HTTPS/WSS fallback | HTTPS/WSS fallback | HTTPS/WSS fallback |
+
+The dedicated profile is a standalone replacement, not an additional file to
+load beside the shared-host profile. It requires a dedicated address with no
+cleartext HTTP virtual hosts on port 80. A single address and port cannot serve
+both ordinary HTTP and TLS/WSS through normal Nginx `http` virtual hosts.
+
 ## Production deployment
 
 The templates assume these paths and ports:
@@ -155,7 +174,10 @@ The templates assume these paths and ports:
 - repository release: `/www/wwwroot/owu/current`
 - Vinext UI: `127.0.0.1:3210`
 - Go proxy: `127.0.0.1:3211`
-- public entry: Nginx on HTTPS `443`
+- primary public entry: Nginx TLS on `443`
+- shared-host TLS fallback: Nginx TLS on `8080`
+- additional TLS fallbacks: Nginx TLS on `8443` and `9443`
+- optional dedicated-address TLS fallback: Nginx TLS on `80`
 
 ### 1. Build artifacts
 
@@ -190,8 +212,10 @@ The web service expects Node and its dependencies under the paths in
 
 ### 3. Configure TLS, Basic Auth, and Nginx
 
-Replace `owu.example.com`, certificate paths, and service paths in
-`deploy/nginx-owu.conf`. Create a unique browser password:
+Replace `owu.example.com`, certificate paths, and service paths in the selected
+Nginx profile. `deploy/nginx-owu.conf` is the shared-host default: port 80 keeps
+serving an HTTP redirect, while 443, 8080, 8443, and 9443 carry HTTPS/WSS.
+Create a unique browser password and install that profile:
 
 ```sh
 sudo htpasswd -c /www/server/nginx/conf/owu.htpasswd owu
@@ -199,6 +223,24 @@ sudo install -m 0644 deploy/nginx-owu.conf /etc/nginx/conf.d/owu.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```
+
+Use `deploy/nginx-owu-dedicated-port80-tls.conf` instead only on an address
+dedicated to OWU. Do not load both profiles. This makes every listed client URL
+a TLS endpoint:
+
+```text
+wss://owu.example.com/tunnel/{resource}       # 443, primary
+wss://owu.example.com:80/tunnel/{resource}    # 80, fallback
+wss://owu.example.com:8080/tunnel/{resource}  # 8080, fallback
+wss://owu.example.com:8443/tunnel/{resource}  # additional fallback
+wss://owu.example.com:9443/tunnel/{resource}  # additional fallback
+```
+
+On the shared-host profile, the safe endpoint set is 443, 8080, 8443, and 9443;
+port 80 is only `http://` -> `https://` browser redirection and must not be
+configured as a `ws://` tunnel. Add any further port with another
+`listen ... ssl` line and use an explicit `wss://host:port` URL. Open each
+selected TCP port in the host firewall and the cloud security group.
 
 Use a trusted certificate for the hostname when possible. The Nginx template
 disables access logs because proxy URLs may expose target hosts and query
@@ -212,8 +254,16 @@ bodies.
 curl -fsS http://127.0.0.1:3211/healthz
 curl -fsS http://127.0.0.1:3210/ >/dev/null
 curl -u owu https://owu.example.com/ >/dev/null
+curl -u owu https://owu.example.com:8080/ >/dev/null
+curl -u owu https://owu.example.com:8443/ >/dev/null
+curl -u owu https://owu.example.com:9443/ >/dev/null
+test "$(curl -sS -o /dev/null -w '%{http_code}' http://owu.example.com/)" = 308
 systemctl --no-pager --full status owu owu-proxy
 ```
+
+For the dedicated-address profile, verify the port-80 TLS handshake explicitly
+with `curl -u owu https://owu.example.com:80/`. A plain
+`http://owu.example.com:80/` request is intentionally invalid in that profile.
 
 Deploy releases to versioned directories and make `current` a symlink. To roll
 back, point `current` to the previous release, restore the previous proxy binary
@@ -272,6 +322,12 @@ OWU_SMOKE_TUNNEL_KEY='<independent-tunnel-key>' \
 go run ./cmd/owu-tunnel-smoke
 ```
 
+Repeat the same smoke test with ports 8080, 8443, and 9443. With the
+dedicated-address profile, also test
+`wss://owu.example.com:80/tunnel/ssh`. A port is not considered a usable
+fallback until the TLS handshake, Basic Auth, tunnel-key check, WebSocket
+Upgrade, and upstream banner/echo all succeed through that exact URL.
+
 The tunnel key is a separate application credential sent as
 `X-OWU-Tunnel-Key` during WebSocket setup. It must match `OWU_TUNNEL_KEY`, remain
 in Keychain on macOS, and must not be the same value as the edge Basic Auth
@@ -289,7 +345,9 @@ swift run OWU
 ```
 
 Set the OWU server URL, Basic Auth username if requested by the deployment,
-independent tunnel key, and optional SHA-256 leaf-certificate pin in the app.
+independent tunnel key, optional SHA-256 leaf-certificate pin, and the ordered
+TLS endpoints in the app. Keep 443 first, then 8080, 8443, and 9443. Add port 80
+only when the dedicated-address TLS profile is actually deployed.
 Verify that listeners bind only to loopback:
 
 ```sh

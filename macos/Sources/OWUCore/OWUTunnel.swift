@@ -11,6 +11,7 @@ public enum OWUConfigurationError: Error, Equatable, LocalizedError, Sendable {
     case credentialsMustDiffer
     case invalidResourceID
     case invalidLocalPort
+    case invalidGatewayPort
 
     public var errorDescription: String? {
         switch self {
@@ -21,6 +22,58 @@ public enum OWUConfigurationError: Error, Equatable, LocalizedError, Sendable {
         case .credentialsMustDiffer: return "The browser password and tunnel key must be different."
         case .invalidResourceID: return "The tunnel resource ID is invalid."
         case .invalidLocalPort: return "Choose a local port from 1 through 65535."
+        case .invalidGatewayPort: return "Gateway fallback ports must be numbers from 1 through 65535."
+        }
+    }
+}
+
+/// One TLS-protected public entry point for an OWU gateway.
+///
+/// OWU deliberately uses WSS on every port, including 80 and 8080. Falling
+/// back to clear-text WebSocket would expose both the browser password and the
+/// independent tunnel key in HTTP headers.
+public struct OWUGatewayEndpoint: Equatable, Hashable, Sendable {
+    public let port: UInt16
+
+    public var scheme: String { "wss" }
+
+    public init(port: UInt16) throws {
+        guard port > 0 else { throw OWUConfigurationError.invalidGatewayPort }
+        self.port = port
+    }
+}
+
+/// Stable gateway failover order shared by the UI and the tunnel runtime.
+public struct OWUGatewayPortPlan: Equatable, Sendable {
+    public static let standardPorts: [UInt16] = [443, 80, 8080]
+    public static let recommendedAdditionalPorts: [UInt16] = [8443, 9443]
+
+    public let endpoints: [OWUGatewayEndpoint]
+    public let additionalPorts: [UInt16]
+
+    public init(additionalPorts: [UInt16] = []) throws {
+        var seen = Set(Self.standardPorts)
+        var normalizedAdditional: [UInt16] = []
+        for port in additionalPorts {
+            guard port > 0 else { throw OWUConfigurationError.invalidGatewayPort }
+            if seen.insert(port).inserted {
+                normalizedAdditional.append(port)
+            }
+        }
+        self.additionalPorts = normalizedAdditional
+        self.endpoints = try (Self.standardPorts + normalizedAdditional).map(OWUGatewayEndpoint.init)
+    }
+
+    /// Parses comma, semicolon, or whitespace-separated fallback ports.
+    public static func parseAdditionalPorts(_ value: String) throws -> [UInt16] {
+        let tokens = value.split { character in
+            character == "," || character == ";" || character.isWhitespace
+        }
+        return try tokens.map { token in
+            guard let port = UInt16(token), port > 0 else {
+                throw OWUConfigurationError.invalidGatewayPort
+            }
+            return port
         }
     }
 }
@@ -31,13 +84,16 @@ public struct OWUServerConfiguration: Equatable, Sendable {
     public let browserPassword: String
     public let tunnelKey: String
     public let certificateSHA256: String?
+    public let gatewayEndpoints: [OWUGatewayEndpoint]
+    public let additionalGatewayPorts: [UInt16]
 
     public init(
         baseURL: URL,
         username: String,
         browserPassword: String,
         tunnelKey: String,
-        certificateSHA256: String? = nil
+        certificateSHA256: String? = nil,
+        additionalGatewayPorts: [UInt16] = []
     ) throws {
         guard baseURL.scheme?.lowercased() == "https",
               baseURL.host != nil,
@@ -60,6 +116,16 @@ public struct OWUServerConfiguration: Equatable, Sendable {
         guard browserPassword != tunnelKey else {
             throw OWUConfigurationError.credentialsMustDiffer
         }
+        var fallbackPorts = additionalGatewayPorts
+        if let explicitPort = baseURL.port {
+            guard let port = UInt16(exactly: explicitPort) else {
+                throw OWUConfigurationError.invalidGatewayPort
+            }
+            if !OWUGatewayPortPlan.standardPorts.contains(port) {
+                fallbackPorts.insert(port, at: 0)
+            }
+        }
+        let portPlan = try OWUGatewayPortPlan(additionalPorts: fallbackPorts)
         self.baseURL = baseURL
         self.username = cleanUsername
         self.browserPassword = browserPassword
@@ -68,29 +134,47 @@ public struct OWUServerConfiguration: Equatable, Sendable {
             .filter { $0.isHexDigit }
             .lowercased()
         self.certificateSHA256 = normalizedPin?.isEmpty == false ? normalizedPin : nil
+        self.gatewayEndpoints = portPlan.endpoints
+        self.additionalGatewayPorts = portPlan.additionalPorts
     }
 
     public func tunnelRequest(resourceID: String) throws -> URLRequest {
+        guard let request = try tunnelRequests(resourceID: resourceID).first else {
+            throw OWUConfigurationError.invalidServer
+        }
+        return request
+    }
+
+    /// Builds the ordered WSS request candidates used by the macOS runtime.
+    /// Credentials are headers only and are recreated identically for each
+    /// attempt; they never become URL user-info or query parameters.
+    public func tunnelRequests(resourceID: String) throws -> [URLRequest] {
         guard OWUTunnelPreset.isValidResourceID(resourceID) else {
             throw OWUConfigurationError.invalidResourceID
         }
-        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+        guard let baseComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw OWUConfigurationError.invalidServer
         }
-        components.scheme = "wss"
-        components.path = "/tunnel/\(resourceID)"
-        components.query = nil
-        components.fragment = nil
-        guard let tunnelURL = components.url else {
-            throw OWUConfigurationError.invalidServer
-        }
-        var request = URLRequest(url: tunnelURL)
-        request.timeoutInterval = 20
         let basic = Data("\(username):\(browserPassword)".utf8).base64EncodedString()
-        request.setValue("Basic \(basic)", forHTTPHeaderField: "Authorization")
-        request.setValue(tunnelKey, forHTTPHeaderField: "X-OWU-Tunnel-Key")
-        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
-        return request
+        return try gatewayEndpoints.map { endpoint in
+            var components = baseComponents
+            components.scheme = endpoint.scheme
+            // Keep the primary WSS URL canonical while replacing any explicit
+            // non-standard port from the configured base URL.
+            components.port = endpoint.port == 443 ? nil : Int(endpoint.port)
+            components.path = "/tunnel/\(resourceID)"
+            components.query = nil
+            components.fragment = nil
+            guard let tunnelURL = components.url else {
+                throw OWUConfigurationError.invalidServer
+            }
+            var request = URLRequest(url: tunnelURL)
+            request.timeoutInterval = 8
+            request.setValue("Basic \(basic)", forHTTPHeaderField: "Authorization")
+            request.setValue(tunnelKey, forHTTPHeaderField: "X-OWU-Tunnel-Key")
+            request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+            return request
+        }
     }
 }
 

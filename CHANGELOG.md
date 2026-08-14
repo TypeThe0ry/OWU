@@ -19,6 +19,10 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   operator-configured TCP services.
 - SwiftUI macOS 14 client with loopback-only listeners, Keychain credential
   storage, and optional certificate pinning.
+- Ordered macOS WSS gateway failover across ports 443, 80, 8080, 8443, 9443,
+  and operator-configured additional TLS ports.
+- Shared-host and dedicated-address Nginx profiles for secure multi-port tunnel
+  entry points.
 - Nginx and systemd deployment templates, automated CI, secret scanning, and
   release documentation.
 
@@ -28,5 +32,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   caused JavaScript and stylesheet requests to return a blank page.
 - Preserved target-origin cookie isolation and canonical proxy URLs during SPA
   navigation.
+- Disabled tunnel handshake redirects and delayed local TCP reads until a WSS
+  endpoint passes its TLS and WebSocket probe.
 
 No tagged release has been published yet.

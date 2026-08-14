@@ -11,6 +11,7 @@ final class AppModel: ObservableObject {
     @Published var browserPassword = ""
     @Published var tunnelKey = ""
     @Published var certificateFingerprint: String
+    @Published var additionalGatewayPorts: String
     @Published private(set) var states: [String: OWUTunnelState] = [:]
     @Published var notice: String?
 
@@ -23,6 +24,8 @@ final class AppModel: ObservableObject {
         serverAddress = defaults.string(forKey: "owu.server") ?? "https://owu.example.com"
         username = defaults.string(forKey: "owu.username") ?? "owu"
         certificateFingerprint = defaults.string(forKey: "owu.certificateSHA256") ?? ""
+        additionalGatewayPorts = defaults.string(forKey: "owu.additionalGatewayPorts")
+            ?? OWUGatewayPortPlan.recommendedAdditionalPorts.map(String.init).joined(separator: ", ")
         for preset in presets { states[preset.id] = .stopped }
         loadSavedCredentials()
     }
@@ -68,12 +71,14 @@ final class AppModel: ObservableObject {
         guard let url = URL(string: serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             throw OWUConfigurationError.invalidServer
         }
+        let additionalPorts = try OWUGatewayPortPlan.parseAdditionalPorts(additionalGatewayPorts)
         return try OWUServerConfiguration(
             baseURL: url,
             username: username,
             browserPassword: browserPassword,
             tunnelKey: tunnelKey,
-            certificateSHA256: certificateFingerprint
+            certificateSHA256: certificateFingerprint,
+            additionalGatewayPorts: additionalPorts
         )
     }
 
@@ -81,6 +86,9 @@ final class AppModel: ObservableObject {
         defaults.set(configuration.baseURL.absoluteString, forKey: "owu.server")
         defaults.set(configuration.username, forKey: "owu.username")
         defaults.set(certificateFingerprint, forKey: "owu.certificateSHA256")
+        let normalizedPorts = configuration.additionalGatewayPorts.map(String.init).joined(separator: ", ")
+        additionalGatewayPorts = normalizedPorts
+        defaults.set(normalizedPorts, forKey: "owu.additionalGatewayPorts")
         do {
             try credentialStore.save(
                 secret: configuration.browserPassword,
