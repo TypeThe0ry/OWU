@@ -104,7 +104,8 @@ export default function Home() {
   const [target, setTarget] = useState("");
   const [message, setMessage] = useState("");
   const [topSites, setTopSites] = useState<TopSite[] | null>(null);
-  const [engineId, setEngineId] = useState("google");
+  const [engineId, setEngineId] = useState("duckduckgo");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("owu-engine");
@@ -128,11 +129,15 @@ export default function Home() {
     };
   }, []);
 
-  const engine = SEARCH_ENGINES.find((candidate) => candidate.id === engineId) ?? SEARCH_ENGINES[0];
+  const engine =
+    SEARCH_ENGINES.find((candidate) => candidate.id === engineId)
+    ?? SEARCH_ENGINES.find((candidate) => candidate.id === "duckduckgo")
+    ?? SEARCH_ENGINES[0];
 
   function selectEngine(id: string) {
     setEngineId(id);
     window.localStorage.setItem("owu-engine", id);
+    setSettingsOpen(false);
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -228,20 +233,6 @@ export default function Home() {
           >
             {message}
           </p>
-
-          <div className="engine-picker" role="group" aria-label="Search engine">
-            {SEARCH_ENGINES.map((candidate) => (
-              <button
-                key={candidate.id}
-                type="button"
-                className={candidate.id === engine.id ? "engine-pill active" : "engine-pill"}
-                onClick={() => selectEngine(candidate.id)}
-                aria-pressed={candidate.id === engine.id}
-              >
-                {candidate.label}
-              </button>
-            ))}
-          </div>
         </form>
 
         {topSites && topSites.length > 0 && (
@@ -268,6 +259,58 @@ export default function Home() {
         <span>OWU</span>
         <span>Simple by design.</span>
       </footer>
+
+      <button
+        className="settings-button"
+        type="button"
+        onClick={() => setSettingsOpen((open) => !open)}
+        aria-label="Settings"
+        aria-expanded={settingsOpen}
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
+
+      {settingsOpen && (
+        <div className="settings-backdrop" onClick={() => setSettingsOpen(false)}>
+          <div
+            className="settings-panel"
+            role="dialog"
+            aria-label="Settings"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="settings-head">
+              <span className="settings-title">Settings</span>
+              <button
+                className="settings-close"
+                type="button"
+                onClick={() => setSettingsOpen(false)}
+                aria-label="Close settings"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="settings-group">
+              <span className="settings-label">Search engine</span>
+              <div className="settings-engines">
+                {SEARCH_ENGINES.map((candidate) => (
+                  <button
+                    key={candidate.id}
+                    type="button"
+                    className={candidate.id === engine.id ? "settings-engine active" : "settings-engine"}
+                    onClick={() => selectEngine(candidate.id)}
+                    aria-pressed={candidate.id === engine.id}
+                  >
+                    {candidate.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

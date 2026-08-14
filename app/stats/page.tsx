@@ -119,12 +119,7 @@ export default function StatsPage() {
                 <section className="stat-card">
                   <div className="stat-label">Traffic</div>
                   <div className="stat-value">{formatBytes(data?.trafficTotal ?? 0)}</div>
-                  <div className="stat-sub">{formatBytes(data?.trafficToday ?? 0)} today</div>
-                </section>
-                <section className="stat-card">
-                  <div className="stat-label">Counting since</div>
-                  <div className="stat-value stat-value-date">{formatTime(data?.since)}</div>
-                  <div className="stat-sub">Auto-refreshes every 10 seconds</div>
+                  <div className="stat-sub">{formatBytes(data?.trafficToday ?? 0)} today · auto-refreshes every 10 seconds</div>
                 </section>
               </div>
 

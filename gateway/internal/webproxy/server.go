@@ -789,7 +789,6 @@ const statsPageHTML = `<!doctype html>
     <section class="metric"><div class="label">Visitors (total)</div><div class="value" id="visitorsTotal">&ndash;</div><div class="sub" id="visitorsToday">&ndash; today</div></section>
     <section class="metric"><div class="label">Uses (total)</div><div class="value" id="usesTotal">&ndash;</div><div class="sub" id="usesToday">&ndash; today</div></section>
     <section class="metric"><div class="label">Traffic (total)</div><div class="value" id="trafficTotal">&ndash;</div><div class="sub" id="trafficToday">&ndash; today</div></section>
-    <section class="metric"><div class="label">Counting since</div><div class="value" id="since" style="font-size:20px;margin-top:14px">&ndash;</div><div class="sub">Anonymous</div></section>
   </div>
   <h2>Most visited websites</h2>
   <ol id="sites"><li class="empty">No data yet</li></ol>
@@ -824,7 +823,6 @@ async function refresh() {
     byId("usesToday").textContent = fmt.format(data.usesToday || 0) + " today";
     byId("trafficTotal").textContent = formatBytes(data.trafficTotal || 0);
     byId("trafficToday").textContent = formatBytes(data.trafficToday || 0) + " today";
-    byId("since").textContent = fmtTime(data.since);
     byId("updated").textContent = "Updated at " + fmtTime(data.updatedAt);
     const list = byId("sites");
     if (!data.topSites || data.topSites.length === 0) {
