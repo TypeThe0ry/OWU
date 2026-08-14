@@ -162,6 +162,57 @@ func TestProxyRewritesCrossOriginRedirect(t *testing.T) {
 	}
 }
 
+func TestHTTPFallbackTarget(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+		ok   bool
+	}{
+		{"https://example.com/", "http://example.com/", true},
+		{"https://example.com:443/", "http://example.com/", true},
+		{"https://example.com:8443/path?q=1", "http://example.com:8443/path?q=1", true},
+		{"http://example.com/", "", false},
+		{"ws://example.com/", "", false},
+		{"https://[2001:db8::1]/", "http://[2001:db8::1]/", true},
+	}
+	for _, tc := range cases {
+		target, err := url.Parse(tc.raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", tc.raw, err)
+		}
+		got := httpFallbackTarget(target)
+		if !tc.ok {
+			if got != nil {
+				t.Fatalf("httpFallbackTarget(%q) = %v, want nil", tc.raw, got)
+			}
+			continue
+		}
+		if got == nil || got.String() != tc.want {
+			t.Fatalf("httpFallbackTarget(%q) = %v, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestClientAddressPrefersForwardedRealIP(t *testing.T) {
+	direct := httptest.NewRequest(http.MethodGet, "/", nil)
+	direct.RemoteAddr = "203.0.113.9:53000"
+	if got := clientAddress(direct); got != direct.RemoteAddr {
+		t.Fatalf("clientAddress(direct) = %q, want %q", got, direct.RemoteAddr)
+	}
+	proxied := httptest.NewRequest(http.MethodGet, "/", nil)
+	proxied.RemoteAddr = "172.67.185.98:53000"
+	proxied.Header.Set("X-Real-IP", "198.51.100.7")
+	if got := clientAddress(proxied); got != "198.51.100.7" {
+		t.Fatalf("clientAddress(proxied) = %q, want the real visitor IP", got)
+	}
+	blank := httptest.NewRequest(http.MethodGet, "/", nil)
+	blank.RemoteAddr = "172.67.185.98:53000"
+	blank.Header.Set("X-Real-IP", "  ")
+	if got := clientAddress(blank); got != blank.RemoteAddr {
+		t.Fatalf("clientAddress(blank) = %q, want direct peer", got)
+	}
+}
+
 func TestProxyBlocksLoopbackWithoutTestException(t *testing.T) {
 	target, _ := url.Parse("http://127.0.0.1:6553/")
 	server := New(Config{})

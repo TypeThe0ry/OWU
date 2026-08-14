@@ -51,7 +51,36 @@ function isWebAddress(value: string): boolean {
   return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d{1,5})?(\/.*)?$/i.test(candidate);
 }
 
-function proxyAddress(value: string): { url?: string; error?: string; search?: boolean } {
+interface SearchEngine {
+  id: string;
+  label: string;
+  searchUrl: (query: string) => string;
+}
+
+const SEARCH_ENGINES: SearchEngine[] = [
+  {
+    id: "google",
+    label: "Google",
+    searchUrl: (query) => `https://www.google.com/search?${new URLSearchParams({ q: query })}`,
+  },
+  {
+    id: "yandex",
+    label: "Yandex",
+    searchUrl: (query) => `https://yandex.com/search/?${new URLSearchParams({ text: query })}`,
+  },
+  {
+    id: "duckduckgo",
+    label: "DuckDuckGo",
+    searchUrl: (query) => `https://duckduckgo.com/?${new URLSearchParams({ q: query })}`,
+  },
+  {
+    id: "bing",
+    label: "Bing",
+    searchUrl: (query) => `https://www.bing.com/search?${new URLSearchParams({ q: query })}`,
+  },
+];
+
+function proxyAddress(value: string, engine: SearchEngine): { url?: string; error?: string; search?: boolean } {
   const input = value.trim();
   if (!input) return { error: "Enter a website address or a search term." };
 
@@ -64,10 +93,10 @@ function proxyAddress(value: string): { url?: string; error?: string; search?: b
     };
   }
 
-  const query = new URLSearchParams({ text: input }).toString();
+  const searchTarget = new URL(engine.searchUrl(input));
   return {
     search: true,
-    url: `/browse/${encodeOrigin("https://yandex.com")}/search/?${query}`,
+    url: `/browse/${encodeOrigin(searchTarget.origin)}${searchTarget.pathname}${searchTarget.search}`,
   };
 }
 
@@ -75,6 +104,14 @@ export default function Home() {
   const [target, setTarget] = useState("");
   const [message, setMessage] = useState("");
   const [topSites, setTopSites] = useState<TopSite[] | null>(null);
+  const [engineId, setEngineId] = useState("google");
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("owu-engine");
+    if (saved && SEARCH_ENGINES.some((candidate) => candidate.id === saved)) {
+      setEngineId(saved);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -91,15 +128,22 @@ export default function Home() {
     };
   }, []);
 
+  const engine = SEARCH_ENGINES.find((candidate) => candidate.id === engineId) ?? SEARCH_ENGINES[0];
+
+  function selectEngine(id: string) {
+    setEngineId(id);
+    window.localStorage.setItem("owu-engine", id);
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const result = proxyAddress(target);
+    const result = proxyAddress(target, engine);
     if (!result.url) {
       setMessage(result.error ?? "Enter a valid website address.");
       return;
     }
 
-    setMessage(result.search ? "Searching Yandex…" : "Opening website…");
+    setMessage(result.search ? `Searching ${engine.label}…` : "Opening website…");
     window.location.assign(result.url);
   }
 
@@ -148,7 +192,7 @@ export default function Home() {
           <span>One address away.</span>
         </h1>
         <p className="hero-copy">
-          Enter any HTTP or HTTPS address, or just a search term. OWU opens websites through your private server and searches Yandex for everything else.
+          Enter any HTTP or HTTPS address, or a search term. OWU opens websites through your private server and searches the engine of your choice for everything else.
         </p>
 
         <form className="glass-search" onSubmit={handleSubmit} noValidate>
@@ -184,6 +228,20 @@ export default function Home() {
           >
             {message}
           </p>
+
+          <div className="engine-picker" role="group" aria-label="Search engine">
+            {SEARCH_ENGINES.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                className={candidate.id === engine.id ? "engine-pill active" : "engine-pill"}
+                onClick={() => selectEngine(candidate.id)}
+                aria-pressed={candidate.id === engine.id}
+              >
+                {candidate.label}
+              </button>
+            ))}
+          </div>
         </form>
 
         {topSites && topSites.length > 0 && (

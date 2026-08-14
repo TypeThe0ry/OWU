@@ -286,6 +286,30 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, target *url.U
 		},
 	}
 	response, err := client.Do(outbound)
+	if err != nil && body == nil && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		// Scheme completion: when an https destination is unreachable over TLS
+		// (certificate failure, connection refused on 443, protocol error), try
+		// the plain-http variant once. This keeps bare hostname input working
+		// for http-only websites.
+		if fallback := httpFallbackTarget(target); fallback != nil {
+			fallbackOutbound, buildErr := http.NewRequestWithContext(ctx, r.Method, fallback.String(), nil)
+			if buildErr == nil {
+				fallbackOutbound.Header = outbound.Header.Clone()
+				fallbackOutbound.Host = fallback.Host
+				fallbackClient := &http.Client{
+					Transport: s.transportFor(fallback),
+					CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+						return http.ErrUseLastResponse
+					},
+				}
+				if fallbackResponse, fallbackErr := fallbackClient.Do(fallbackOutbound); fallbackErr == nil {
+					response = fallbackResponse
+					err = nil
+					w.Header().Set("X-OWU-Scheme-Fallback", "http")
+				}
+			}
+		}
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "The destination did not respond.")
 		return
@@ -491,6 +515,20 @@ func encodeOrigin(target *url.URL) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(origin))
 }
 
+// httpFallbackTarget returns the plain-http variant of an https target, or
+// nil when no fallback applies.
+func httpFallbackTarget(target *url.URL) *url.URL {
+	if !strings.EqualFold(target.Scheme, "https") {
+		return nil
+	}
+	copy := *target
+	copy.Scheme = "http"
+	if copy.Port() == "443" {
+		copy.Host = copy.Hostname()
+	}
+	return &copy
+}
+
 func canonicalizeOrigin(target *url.URL) {
 	target.Scheme = strings.ToLower(target.Scheme)
 	host := strings.ToLower(strings.TrimSuffix(target.Hostname(), "."))
@@ -539,7 +577,7 @@ func proxyURL(target *url.URL) string {
 func copyRequestHeaders(destination, source http.Header) {
 	for name, values := range source {
 		lower := strings.ToLower(name)
-		if lower == "authorization" || lower == "cookie" || lower == "host" || lower == "accept-encoding" || lower == "connection" || lower == "proxy-connection" || lower == "upgrade" || lower == "te" || lower == "trailer" || lower == "transfer-encoding" || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "proxy-") || strings.HasPrefix(lower, "sec-fetch-") {
+		if lower == "authorization" || lower == "cookie" || lower == "host" || lower == "accept-encoding" || lower == "connection" || lower == "proxy-connection" || lower == "upgrade" || lower == "te" || lower == "trailer" || lower == "transfer-encoding" || lower == "x-real-ip" || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "proxy-") || strings.HasPrefix(lower, "sec-fetch-") {
 			continue
 		}
 		for _, value := range values {
@@ -644,7 +682,18 @@ func (s *Server) recordUse(r *http.Request, site, path string) {
 	if s.stats == nil {
 		return
 	}
-	s.stats.Record(s.stats.VisitorID(r.RemoteAddr), stats.NormalizeSite(site), !hasMediaExtension(path))
+	s.stats.Record(s.stats.VisitorID(clientAddress(r)), stats.NormalizeSite(site), !hasMediaExtension(path))
+}
+
+// clientAddress returns the real visitor address when Nginx forwards it.
+// Requests arrive through Cloudflare, so the TCP peer is a Cloudflare edge IP;
+// Nginx restores the visitor IP from CF-Connecting-IP and sends it as
+// X-Real-IP. The direct peer is the fallback for non-proxied deployments.
+func clientAddress(r *http.Request) string {
+	if real := strings.TrimSpace(r.Header.Get("X-Real-IP")); real != "" {
+		return real
+	}
+	return r.RemoteAddr
 }
 
 func (s *Server) recordTraffic(bytes uint64) {

@@ -399,6 +399,26 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
 .popular-host { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .popular-count { color: var(--accent); font-size: 11px; font-variant-numeric: tabular-nums; font-weight: 800; }
 
+.engine-picker { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 10px; }
+.engine-pill {
+  background: color-mix(in srgb, var(--glass) 70%, transparent);
+  border: 1px solid var(--glass-line);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 5px 11px;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+.engine-pill:hover { background: var(--glass-strong); color: var(--text); }
+.engine-pill.active {
+  background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, var(--accent-two) 12%, transparent));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text);
+}
+
 .stats-shell { overflow: hidden; }
 .stats-stage { align-self: center; margin: 2vh auto; max-width: 880px; width: 100%; }
 .stats-card {
@@ -458,6 +478,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
   .direct-note { display: none; }
   .popular-chips { gap: 6px; }
   .popular-chip { font-size: 11px; padding: 5px 11px; }
+  .engine-picker { margin-top: 6px; }
 }
 
 @media (max-width: 680px) and (max-height: 780px) {
@@ -476,4 +497,5 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
 
 @media (max-height: 600px) {
   .owu-shell { overflow: auto; }
+  .engine-picker { display: none; }
 }
