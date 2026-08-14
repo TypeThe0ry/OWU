@@ -3,6 +3,8 @@ package webproxy
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
+	"io"
 	"net/url"
 	"regexp"
 	"strings"
@@ -195,6 +197,507 @@ func rewriteReference(value string, base *url.URL) string {
 		return value
 	}
 	return proxyURL(resolved)
+}
+
+// rewriteHLSManifest rewrites every network reference in an HLS media or
+// multivariant playlist through the canonical /browse/{origin}/ route. It is
+// deliberately line based: HLS URI lines and attribute lists are not CSV, and
+// a signed URI inside quotes may itself contain commas.
+//
+// The function preserves the input's line endings and all non-URI text. Each
+// upstream body is rewritten once before Nginx stores the resulting response;
+// a cache hit is served directly and does not re-enter this function.
+func rewriteHLSManifest(body []byte, base *url.URL) []byte {
+	if len(body) == 0 || base == nil {
+		return append([]byte(nil), body...)
+	}
+
+	input := string(body)
+	var output strings.Builder
+	output.Grow(len(input) + len(input)/4)
+
+	for position := 0; position < len(input); {
+		lineEnd := position
+		for lineEnd < len(input) && input[lineEnd] != '\r' && input[lineEnd] != '\n' {
+			lineEnd++
+		}
+		output.WriteString(rewriteHLSLine(input[position:lineEnd], base))
+
+		if lineEnd == len(input) {
+			break
+		}
+		if input[lineEnd] == '\r' && lineEnd+1 < len(input) && input[lineEnd+1] == '\n' {
+			output.WriteString("\r\n")
+			position = lineEnd + 2
+		} else {
+			output.WriteByte(input[lineEnd])
+			position = lineEnd + 1
+		}
+	}
+
+	return []byte(output.String())
+}
+
+func rewriteHLSLine(line string, base *url.URL) string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return line
+	}
+	if !strings.HasPrefix(trimmed, "#") {
+		return rewriteManifestReference(line, base)
+	}
+	if !strings.HasPrefix(strings.ToUpper(trimmed), "#EXT-X-") {
+		return line
+	}
+	return rewriteHLSURIAttributes(line, base)
+}
+
+func rewriteHLSURIAttributes(line string, base *url.URL) string {
+	colon := strings.IndexByte(line, ':')
+	if colon < 0 {
+		return line
+	}
+
+	var output strings.Builder
+	output.Grow(len(line) + len(line)/4)
+	lastWritten := 0
+	position := colon + 1
+
+	for position < len(line) {
+		for position < len(line) && (line[position] == ',' || isASCIIWhitespace(line[position])) {
+			position++
+		}
+		if position >= len(line) {
+			break
+		}
+
+		nameStart := position
+		for position < len(line) && line[position] != '=' && line[position] != ',' {
+			position++
+		}
+		if position >= len(line) || line[position] != '=' {
+			for position < len(line) && line[position] != ',' {
+				position++
+			}
+			continue
+		}
+
+		name := strings.TrimSpace(line[nameStart:position])
+		position++
+		for position < len(line) && isASCIIWhitespace(line[position]) {
+			position++
+		}
+		if position >= len(line) {
+			break
+		}
+
+		isURI := strings.EqualFold(name, "URI") || strings.EqualFold(name, "SERVER-URI")
+		if line[position] == '"' || line[position] == '\'' {
+			quote := line[position]
+			valueStart := position + 1
+			valueEnd := valueStart
+			for valueEnd < len(line) && line[valueEnd] != quote {
+				valueEnd++
+			}
+			if valueEnd >= len(line) {
+				break
+			}
+			if isURI {
+				rewritten := rewriteManifestReference(line[valueStart:valueEnd], base)
+				if rewritten != line[valueStart:valueEnd] {
+					output.WriteString(line[lastWritten:valueStart])
+					output.WriteString(rewritten)
+					lastWritten = valueEnd
+				}
+			}
+			position = valueEnd + 1
+			continue
+		}
+
+		valueStart := position
+		for position < len(line) && line[position] != ',' {
+			position++
+		}
+		if isURI {
+			rewritten := rewriteManifestReference(line[valueStart:position], base)
+			if rewritten != line[valueStart:position] {
+				output.WriteString(line[lastWritten:valueStart])
+				output.WriteString(rewritten)
+				lastWritten = position
+			}
+		}
+	}
+
+	if lastWritten == 0 {
+		return line
+	}
+	output.WriteString(line[lastWritten:])
+	return output.String()
+}
+
+// rewriteManifestReference is rewriteReference with media-specific whitespace
+// preservation. Manifest input is always interpreted in the target document's
+// URL space: a target is allowed to have a real /browse/<token>/... path, so a
+// browse-shaped value cannot be trusted as an already-proxied route here.
+func rewriteManifestReference(value string, base *url.URL) string {
+	start, end := trimASCIIWhitespaceBounds(value)
+	if start == end || base == nil {
+		return value
+	}
+	trimmed := value[start:end]
+	rewritten := rewriteReference(trimmed, base)
+	if rewritten == trimmed {
+		return value
+	}
+	return value[:start] + rewritten + value[end:]
+}
+
+func trimASCIIWhitespaceBounds(value string) (int, int) {
+	start := 0
+	for start < len(value) && isASCIIWhitespace(value[start]) {
+		start++
+	}
+	end := len(value)
+	for end > start && isASCIIWhitespace(value[end-1]) {
+		end--
+	}
+	return start, end
+}
+
+// rewriteDASHManifest performs a formatting-preserving rewrite of the URL
+// surfaces defined by DASH: BaseURL/Location text, xlink/xml base links, and
+// SegmentTemplate/SegmentURL/Initialization URL attributes. Absolute,
+// scheme-relative, and root-relative references are always proxied. Relative
+// references remain relative when the document has BaseURL/xml:base hierarchy,
+// so the DASH inheritance rules keep working after its parent BaseURL is
+// rewritten.
+func rewriteDASHManifest(body []byte, base *url.URL) ([]byte, error) {
+	if len(body) == 0 || base == nil {
+		return append([]byte(nil), body...), nil
+	}
+	if err := validateXML(body); err != nil {
+		return nil, err
+	}
+
+	input := string(body)
+	hasBaseHierarchy := dashHasBaseHierarchy(input)
+	stack := make([]string, 0, 8)
+	var output strings.Builder
+	output.Grow(len(input) + len(input)/5)
+
+	for position := 0; position < len(input); {
+		markup := strings.IndexByte(input[position:], '<')
+		if markup < 0 {
+			text := input[position:]
+			if len(stack) > 0 && isDASHURLTextElement(stack[len(stack)-1]) {
+				text = rewriteDASHText(text, base)
+			}
+			output.WriteString(text)
+			break
+		}
+		markup += position
+		text := input[position:markup]
+		if len(stack) > 0 && isDASHURLTextElement(stack[len(stack)-1]) {
+			text = rewriteDASHText(text, base)
+		}
+		output.WriteString(text)
+
+		switch {
+		case strings.HasPrefix(input[markup:], "<!--"):
+			end := strings.Index(input[markup+4:], "-->")
+			if end < 0 {
+				return nil, io.ErrUnexpectedEOF
+			}
+			end += markup + 7
+			output.WriteString(input[markup:end])
+			position = end
+			continue
+		case strings.HasPrefix(input[markup:], "<![CDATA["):
+			end := strings.Index(input[markup+9:], "]]>")
+			if end < 0 {
+				return nil, io.ErrUnexpectedEOF
+			}
+			end += markup + 12
+			output.WriteString(input[markup:end])
+			position = end
+			continue
+		case strings.HasPrefix(input[markup:], "<?"):
+			end := strings.Index(input[markup+2:], "?>")
+			if end < 0 {
+				return nil, io.ErrUnexpectedEOF
+			}
+			end += markup + 4
+			output.WriteString(input[markup:end])
+			position = end
+			continue
+		}
+
+		tagEnd := findXMLTagEnd(input, markup)
+		if tagEnd < 0 {
+			return nil, io.ErrUnexpectedEOF
+		}
+		tag := input[markup : tagEnd+1]
+		if strings.HasPrefix(tag, "<!") {
+			output.WriteString(tag)
+			position = tagEnd + 1
+			continue
+		}
+
+		name, closing, selfClosing := xmlTagName(tag)
+		if closing {
+			output.WriteString(tag)
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+			position = tagEnd + 1
+			continue
+		}
+
+		output.WriteString(rewriteDASHStartTag(tag, name, base, hasBaseHierarchy))
+		if name != "" && !selfClosing {
+			stack = append(stack, name)
+		}
+		position = tagEnd + 1
+	}
+
+	rewritten := []byte(output.String())
+	if err := validateXML(rewritten); err != nil {
+		return nil, err
+	}
+	return rewritten, nil
+}
+
+func validateXML(body []byte) error {
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	for {
+		if _, err := decoder.Token(); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+func dashHasBaseHierarchy(input string) bool {
+	lower := strings.ToLower(input)
+	return strings.Contains(lower, "<baseurl") || strings.Contains(lower, ":baseurl") || strings.Contains(lower, "xml:base=")
+}
+
+func findXMLTagEnd(input string, start int) int {
+	quote := byte(0)
+	brackets := 0
+	for position := start + 1; position < len(input); position++ {
+		switch input[position] {
+		case '\'', '"':
+			if quote == 0 {
+				quote = input[position]
+			} else if quote == input[position] {
+				quote = 0
+			}
+		case '[':
+			if quote == 0 {
+				brackets++
+			}
+		case ']':
+			if quote == 0 && brackets > 0 {
+				brackets--
+			}
+		case '>':
+			if quote == 0 && brackets == 0 {
+				return position
+			}
+		}
+	}
+	return -1
+}
+
+func xmlTagName(tag string) (name string, closing, selfClosing bool) {
+	position := 1
+	for position < len(tag) && isASCIIWhitespace(tag[position]) {
+		position++
+	}
+	if position < len(tag) && tag[position] == '/' {
+		closing = true
+		position++
+		for position < len(tag) && isASCIIWhitespace(tag[position]) {
+			position++
+		}
+	}
+	start := position
+	for position < len(tag) && !isASCIIWhitespace(tag[position]) && tag[position] != '/' && tag[position] != '>' {
+		position++
+	}
+	name = strings.ToLower(tag[start:position])
+	if colon := strings.LastIndexByte(name, ':'); colon >= 0 {
+		name = name[colon+1:]
+	}
+	end := len(tag) - 2
+	for end >= 0 && isASCIIWhitespace(tag[end]) {
+		end--
+	}
+	selfClosing = end >= 0 && tag[end] == '/'
+	return name, closing, selfClosing
+}
+
+func isDASHURLTextElement(name string) bool {
+	switch name {
+	case "baseurl", "location", "patchlocation":
+		return true
+	default:
+		return false
+	}
+}
+
+func rewriteDASHText(raw string, base *url.URL) string {
+	decoded, err := decodeXMLText(raw)
+	if err != nil {
+		return raw
+	}
+	rewritten := rewriteDASHExternalReference(decoded, base)
+	if rewritten == decoded {
+		return raw
+	}
+	return escapeXMLText(rewritten)
+}
+
+func rewriteDASHStartTag(tag, element string, base *url.URL, hasBaseHierarchy bool) string {
+	if element == "" {
+		return tag
+	}
+	nameEnd := 1
+	for nameEnd < len(tag) && !isASCIIWhitespace(tag[nameEnd]) && tag[nameEnd] != '>' && tag[nameEnd] != '/' {
+		nameEnd++
+	}
+
+	var output strings.Builder
+	output.Grow(len(tag) + len(tag)/5)
+	lastWritten := 0
+	position := nameEnd
+	for position < len(tag)-1 {
+		for position < len(tag)-1 && isASCIIWhitespace(tag[position]) {
+			position++
+		}
+		if position >= len(tag)-1 || tag[position] == '/' || tag[position] == '>' {
+			break
+		}
+		attributeStart := position
+		for position < len(tag)-1 && !isASCIIWhitespace(tag[position]) && tag[position] != '=' && tag[position] != '>' {
+			position++
+		}
+		attributeName := tag[attributeStart:position]
+		for position < len(tag)-1 && isASCIIWhitespace(tag[position]) {
+			position++
+		}
+		if position >= len(tag)-1 || tag[position] != '=' {
+			continue
+		}
+		position++
+		for position < len(tag)-1 && isASCIIWhitespace(tag[position]) {
+			position++
+		}
+		if position >= len(tag)-1 || (tag[position] != '"' && tag[position] != '\'') {
+			continue
+		}
+		quote := tag[position]
+		valueStart := position + 1
+		valueEnd := valueStart
+		for valueEnd < len(tag)-1 && tag[valueEnd] != quote {
+			valueEnd++
+		}
+		if valueEnd >= len(tag)-1 {
+			break
+		}
+
+		if isDASHURLAttribute(element, attributeName) {
+			decoded, err := decodeXMLAttribute(tag[valueStart:valueEnd], quote)
+			if err == nil {
+				rewritten := decoded
+				if hasBaseHierarchy {
+					rewritten = rewriteDASHExternalReference(decoded, base)
+				} else {
+					rewritten = rewriteManifestReference(decoded, base)
+				}
+				if rewritten != decoded {
+					output.WriteString(tag[lastWritten:valueStart])
+					output.WriteString(escapeXMLAttribute(rewritten, quote))
+					lastWritten = valueEnd
+				}
+			}
+		}
+		position = valueEnd + 1
+	}
+	if lastWritten == 0 {
+		return tag
+	}
+	output.WriteString(tag[lastWritten:])
+	return output.String()
+}
+
+func isDASHURLAttribute(element, attributeName string) bool {
+	local := strings.ToLower(attributeName)
+	if colon := strings.LastIndexByte(local, ':'); colon >= 0 {
+		local = local[colon+1:]
+	}
+	if local == "href" || strings.EqualFold(attributeName, "xml:base") {
+		return true
+	}
+	switch element {
+	case "segmenttemplate":
+		return local == "media" || local == "initialization" || local == "index"
+	case "segmenturl":
+		return local == "media" || local == "index"
+	case "initialization", "representationindex":
+		return local == "sourceurl"
+	default:
+		return false
+	}
+}
+
+func rewriteDASHExternalReference(value string, base *url.URL) string {
+	start, end := trimASCIIWhitespaceBounds(value)
+	if start == end {
+		return value
+	}
+	trimmed := value[start:end]
+	lower := strings.ToLower(trimmed)
+	if !(strings.HasPrefix(trimmed, "/") || strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")) {
+		return value
+	}
+	return rewriteManifestReference(value, base)
+}
+
+func decodeXMLText(raw string) (string, error) {
+	var wrapper struct {
+		Value string `xml:",chardata"`
+	}
+	err := xml.Unmarshal([]byte("<owu>"+raw+"</owu>"), &wrapper)
+	return wrapper.Value, err
+}
+
+func decodeXMLAttribute(raw string, quote byte) (string, error) {
+	var wrapper struct {
+		Value string `xml:"value,attr"`
+	}
+	markup := "<owu value=" + string(quote) + raw + string(quote) + "/>"
+	err := xml.Unmarshal([]byte(markup), &wrapper)
+	return wrapper.Value, err
+}
+
+func escapeXMLText(value string) string {
+	var output bytes.Buffer
+	if err := xml.EscapeText(&output, []byte(value)); err != nil {
+		return value
+	}
+	return output.String()
+}
+
+func escapeXMLAttribute(value string, quote byte) string {
+	escaped := escapeXMLText(value)
+	if quote == '"' {
+		return strings.ReplaceAll(escaped, "\"", "&#34;")
+	}
+	return strings.ReplaceAll(escaped, "'", "&#39;")
 }
 
 func rewriteSrcset(value string, base *url.URL) string {

@@ -138,6 +138,8 @@ go vet ./...
 | `OWU_PROXY_LISTEN_ADDR` | `127.0.0.1:3211` | Data-plane listener; keep it behind Nginx. |
 | `OWU_TUNNEL_KEY` | empty | Independent secret required by fixed-resource TCP tunnels; minimum 20 characters. |
 | `OWU_TCP_RESOURCES` | empty | Comma-separated `id=host:port` mappings, for example `ssh=127.0.0.1:22,minecraft=mc.example.net:25565`. |
+| `OWU_TRANSPORT_POOL_SIZE` | `64` | Maximum per-origin outbound HTTP transport pools retained for connection reuse. |
+| `OWU_MEDIA_CACHE_MAX_AGE` | `15m` | Upper bound for an explicitly cacheable target media/static TTL; manifests are capped at 60 seconds. |
 
 Copy `deploy/owu-proxy.env.example` to `/etc/owu/owu-proxy.env`, set mode
 `0600`, and generate a tunnel key that is **different** from the Basic Auth
@@ -258,6 +260,81 @@ disables access logs because proxy URLs may expose target hosts and query
 strings. If request metrics are required, define a target-free log format that
 does not record `$request_uri`, `Referer`, `Authorization`, cookies, or request
 bodies.
+
+#### Douyin and Bilibili media acceleration
+
+Both Nginx profiles include a bounded `owu_media` edge cache and connection
+tuning intended for Douyin/Bilibili video, image, font, manifest, CSS,
+JavaScript, and WASM resources. Rewritten HTML remains uncached; public CSS is
+cached only after OWU finishes its deterministic URL rewrite. The cache
+primitives are deliberately in
+the HTTP scope at the top of each profile; keep the selected profile under an
+`http { ... }` include such as `conf.d`, and do not paste only its `server`
+block. Create the cache directory for the configured Nginx worker user before
+the first reload (the user is commonly `nginx`, `www-data`, or `www`):
+
+```sh
+sudo install -d -o nginx -g nginx -m 0750 /var/cache/nginx/owu-media
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Adjust the owner in that command to match the `user` directive reported by
+`sudo nginx -T`. The checked-in default is a 4 GiB disk cache with a 4 GiB
+free-space floor, 64 MiB of key metadata, and 24 hours of inactivity retention.
+Cache files and metadata are private session data: keep the directory readable
+only by the Nginx worker and administrators. Change `max_size`, `min_free`, and
+`inactive` in the selected profile when storage is constrained. No
+`http_slice_module` dependency is required.
+
+The cache trust contract is intentionally narrow:
+
+- only canonical `/browse/<origin-token>/...` `GET`/`HEAD` resources are
+  eligible;
+- the Go proxy must emit `X-OWU-Cache: public-media` and a positive
+  `X-Accel-Expires` after validating the original target response is public;
+- HTML/API responses, virtual documents, UI files, Referer fallbacks,
+  WebSockets, and TCP tunnels are explicitly uncached;
+- requests with a Cookie for the current target, client `no-cache`, Range, or
+  an HTTP validator bypass storage; unrelated OWU cookies are isolated by the
+  complete Cookie header in the cache key. Responses with `Set-Cookie`, an
+  attachment disposition, an unapproved MIME type, or no explicit Go marker
+  are not stored;
+- Range and validator requests are internally routed to a location with
+  `proxy_cache off`, preserve `Range`/`If-Range`, and stream a destination `206`
+  without placing a partial object in the cache;
+- the edge Basic `Authorization` value is consumed by Nginx and stripped before
+  Go. Destination authorization is never forwarded through that header, and
+  `$remote_user` remains part of every cache key for principal isolation.
+
+HTTP/2 handles concurrent page assets on all TLS listener ports, while the UI
+and Go upstream pools reuse HTTP/1.1 connections. Cache locking collapses a
+first-request stampede; background revalidation and bounded stale-on-error
+serve only objects that already passed the public-media contract. Nginx honors
+`X-Accel-Buffering: no` from Go for SSE and partial media, so long-lived or
+range traffic remains streaming rather than waiting for a temporary file.
+
+For a canonical anonymous media URL that Go has marked cacheable, the first
+request should be `MISS` and the second `HIT`. A byte range must remain a 206
+with exactly the requested length:
+
+```sh
+MEDIA_URL='https://owu.example.com/browse/ORIGIN_TOKEN/path/to/media.mp4'
+curl -skI -u owu "$MEDIA_URL" | grep -i '^X-OWU-Cache-Status:'
+curl -skI -u owu "$MEDIA_URL" | grep -i '^X-OWU-Cache-Status:'
+
+curl -sku owu -H 'Range: bytes=0-1023' \
+  -D /tmp/owu-range.headers -o /tmp/owu-range.bin "$MEDIA_URL"
+grep -Eai '^(HTTP/|Content-Range:|X-OWU-Cache-Status:)' /tmp/owu-range.headers
+test "$(wc -c </tmp/owu-range.bin)" -eq 1024
+```
+
+Expected cache states are `MISS` then `HIT`; the range response is
+`206 Partial Content` with `X-OWU-Cache-Status: BYPASS`. A signed media URL is
+keyed with its full raw query. Login-protected feeds intentionally bypass the
+shared cache once target cookies are present. DRM, device-bound playback,
+short-lived signatures, and upstream bot challenges remain destination
+compatibility constraints rather than cache misses.
 
 ### 4. Verify and roll back
 
@@ -385,7 +462,7 @@ future `NEPacketTunnelProvider` planning.
 | DRM, WebAuthn, certificate/device binding | Usually incompatible | These mechanisms intentionally bind to an origin, device, certificate, or protected media path OWU cannot impersonate. |
 | Destination HTTP Authorization | Limited | OWU's public edge uses Basic Auth and strips `Authorization` before upstream forwarding, so target sites that require an `Authorization` request header need a separate design. URL-embedded credentials are rejected. |
 | Frames and strict origin checks | Limited | OWU supplies a compatibility CSP, but frame ancestors, postMessage origin validation, COOP/COEP, CORS, and server-side Origin policy can still break complex apps. |
-| Downloads, range requests, media | Best effort | Streaming and ranges pass through; very large rewritable HTML/CSS bodies exceed the rewrite cap rather than buffering without limit. |
+| Downloads, range requests, media | Best effort | Streaming and exact 206 ranges pass through. HLS URI lines/attributes and standard DASH URL surfaces are rewritten; DASH CDATA/vendor extensions, DRM, and very large rewritable bodies remain compatibility limits. |
 | Raw TCP on macOS | Supported for fixed resources | SSH, Minecraft, databases, and similar TCP protocols work when mapped by the operator. No arbitrary host/port selection. |
 | UDP and full-device VPN | Not implemented | A future Network Extension phase requires Apple entitlements, packet routing, DNS handling, and physical-Mac validation. |
 

@@ -18,6 +18,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"permit-gateway/internal/safety"
@@ -26,12 +27,15 @@ import (
 )
 
 const (
-	browsePrefix        = "/browse/"
-	socketPrefix        = "/socket/"
-	tunnelPrefix        = "/tunnel/"
-	virtualOriginParam  = "__owu_origin_v1"
-	maxRequestBodyBytes = 64 << 20
-	maxRewriteBodyBytes = 16 << 20
+	browsePrefix             = "/browse/"
+	socketPrefix             = "/socket/"
+	tunnelPrefix             = "/tunnel/"
+	virtualOriginParam       = "__owu_origin_v1"
+	maxRequestBodyBytes      = 64 << 20
+	maxRewriteBodyBytes      = 16 << 20
+	defaultTransportPoolSize = 64
+	defaultMediaCacheMaxAge  = 15 * time.Minute
+	manifestCacheMaxAge      = 60 * time.Second
 )
 
 type Config struct {
@@ -39,6 +43,8 @@ type Config struct {
 	DemoAllowedOrigin string
 	TunnelKey         string
 	TunnelResources   map[string]TCPResource
+	TransportPoolSize int
+	MediaCacheMaxAge  time.Duration
 }
 
 func LoadConfig() Config {
@@ -51,9 +57,11 @@ func LoadConfig() Config {
 		panic("invalid OWU_TCP_RESOURCES: " + err.Error())
 	}
 	return Config{
-		ListenAddr:      listen,
-		TunnelKey:       strings.TrimSpace(os.Getenv("OWU_TUNNEL_KEY")),
-		TunnelResources: resources,
+		ListenAddr:        listen,
+		TunnelKey:         strings.TrimSpace(os.Getenv("OWU_TUNNEL_KEY")),
+		TunnelResources:   resources,
+		TransportPoolSize: positiveIntEnv("OWU_TRANSPORT_POOL_SIZE", defaultTransportPoolSize),
+		MediaCacheMaxAge:  durationEnv("OWU_MEDIA_CACHE_MAX_AGE", defaultMediaCacheMaxAge),
 	}
 }
 
@@ -62,15 +70,66 @@ type Server struct {
 	demoAllowedOrigin string
 	tunnelKey         string
 	tunnelResources   map[string]TCPResource
+	transportMu       sync.Mutex
+	transports        map[string]*transportEntry
+	transportSequence uint64
+	transportPoolSize int
+	mediaCacheMaxAge  time.Duration
+}
+
+type transportEntry struct {
+	transport *http.Transport
+	lastUsed  uint64
 }
 
 func New(config Config) *Server {
+	transportPoolSize := config.TransportPoolSize
+	if transportPoolSize == 0 {
+		transportPoolSize = defaultTransportPoolSize
+	}
+	if transportPoolSize < 1 {
+		transportPoolSize = 1
+	}
+	mediaCacheMaxAge := config.MediaCacheMaxAge
+	if mediaCacheMaxAge == 0 {
+		mediaCacheMaxAge = defaultMediaCacheMaxAge
+	}
 	return &Server{
 		safety:            safePolicy(config.DemoAllowedOrigin),
 		demoAllowedOrigin: config.DemoAllowedOrigin,
 		tunnelKey:         config.TunnelKey,
 		tunnelResources:   config.TunnelResources,
+		transports:        make(map[string]*transportEntry),
+		transportPoolSize: transportPoolSize,
+		mediaCacheMaxAge:  mediaCacheMaxAge,
 	}
+}
+
+func positiveIntEnv(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 || value > 4096 {
+		panic("invalid " + name + ": expected an integer from 1 to 4096")
+	}
+	return value
+}
+
+func durationEnv(name string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	if strings.EqualFold(raw, "off") || raw == "0" {
+		return -1
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 || value > 24*time.Hour {
+		panic("invalid " + name + ": expected off or a duration up to 24h")
+	}
+	return value
 }
 
 func safePolicy(demoOrigin string) safety.Policy {
@@ -165,7 +224,6 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, target *url.U
 	rewriteRequestOrigin(outbound, r)
 
 	transport := s.transportFor(target)
-	defer transport.CloseIdleConnections()
 	client := &http.Client{
 		Transport: transport,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -179,7 +237,7 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, target *url.U
 	}
 	defer response.Body.Close()
 
-	if err := writeProxyResponse(w, r, response, target, token); err != nil {
+	if err := writeProxyResponseWithCache(w, r, response, target, token, s.mediaCacheMaxAge); err != nil {
 		writeError(w, http.StatusBadGateway, "The destination response could not be processed.")
 	}
 }
@@ -247,12 +305,52 @@ func (s *Server) handleSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) transportFor(target *url.URL) *http.Transport {
+	key := strings.ToLower(target.Scheme) + "://" + strings.ToLower(target.Host)
+	s.transportMu.Lock()
+	s.transportSequence++
+	if entry := s.transports[key]; entry != nil {
+		entry.lastUsed = s.transportSequence
+		transport := entry.transport
+		s.transportMu.Unlock()
+		return transport
+	}
+
+	var evicted *http.Transport
+	if len(s.transports) >= s.transportPoolSize {
+		var oldestKey string
+		oldestSequence := ^uint64(0)
+		for candidateKey, entry := range s.transports {
+			if entry.lastUsed < oldestSequence {
+				oldestKey = candidateKey
+				oldestSequence = entry.lastUsed
+			}
+		}
+		if oldestKey != "" {
+			evicted = s.transports[oldestKey].transport
+			delete(s.transports, oldestKey)
+		}
+	}
+
+	transport := s.newTransport(target)
+	s.transports[key] = &transportEntry{transport: transport, lastUsed: s.transportSequence}
+	s.transportMu.Unlock()
+	if evicted != nil {
+		// CloseIdleConnections leaves in-flight requests alone. Once the bounded
+		// per-origin LRU evicts an entry, its idle sockets no longer consume file
+		// descriptors while active video streams are allowed to finish.
+		evicted.CloseIdleConnections()
+	}
+	return transport
+}
+
+func (s *Server) newTransport(target *url.URL) *http.Transport {
 	host, port := target.Hostname(), targetPort(target)
 	return &http.Transport{
 		Proxy:                 nil,
 		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          64,
-		IdleConnTimeout:       30 * time.Second,
+		MaxIdleConns:          8,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       60 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
 		ExpectContinueTimeout: time.Second,
@@ -478,24 +576,47 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 func writeProxyResponse(w http.ResponseWriter, incoming *http.Request, response *http.Response, target *url.URL, token string) error {
+	return writeProxyResponseWithCache(w, incoming, response, target, token, defaultMediaCacheMaxAge)
+}
+
+func writeProxyResponseWithCache(w http.ResponseWriter, incoming *http.Request, response *http.Response, target *url.URL, token string, cacheMaxAge time.Duration) error {
 	contentType := strings.ToLower(response.Header.Get("Content-Type"))
 	partialResponse := response.StatusCode == http.StatusPartialContent || response.Header.Get("Content-Range") != ""
 	rewriteHTMLBody := !partialResponse && (strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml"))
 	rewriteCSSBody := !partialResponse && strings.Contains(contentType, "text/css")
+	rewriteHLSBody := !partialResponse && !rewriteHTMLBody && isHLSManifestContent(contentType, target.Path)
+	rewriteDASHBody := !partialResponse && !rewriteHTMLBody && isDASHManifestContent(contentType, target.Path)
+	rewrittenResponse := rewriteHTMLBody || rewriteCSSBody || rewriteHLSBody || rewriteDASHBody
+	// Rewritten CSS is deterministic for the target URL/token and can therefore
+	// use the guarded public-static cache path. HTML contains live page/session
+	// state and remains uncacheable even when the origin labels it public.
+	cache := mediaCacheDecisionFor(incoming, response, target, token, rewriteHTMLBody, cacheMaxAge)
 
 	copyResponseHeaders(w.Header(), response.Header)
-	rewriteResponseHeaders(w.Header(), response, target, token, incoming.Header.Get("X-Forwarded-Proto") == "https")
+	rewriteResponseHeaders(w.Header(), response, target, token, incoming.Header.Get("X-Forwarded-Proto") == "https", cache)
+	if partialResponse || strings.HasPrefix(contentType, "text/event-stream") || (cache.sharedMaxAge == 0 && isStreamMediaContent(contentType, target.Path)) {
+		// Disable reverse-proxy buffering for byte ranges and event streams. This
+		// preserves seek latency for Bilibili/Douyin media and immediate SSE delivery.
+		w.Header().Set("X-Accel-Buffering", "no")
+	}
 
 	if incoming.Method == http.MethodHead || response.Body == nil {
+		if rewrittenResponse {
+			w.Header().Del("Content-Length")
+			w.Header().Del("ETag")
+		} else {
+			setStreamingContentLength(w.Header(), response)
+		}
 		w.WriteHeader(response.StatusCode)
 		return nil
 	}
-	if rewriteHTMLBody || rewriteCSSBody {
+	if rewrittenResponse {
 		body, err := io.ReadAll(io.LimitReader(response.Body, maxRewriteBodyBytes+1))
 		if err != nil || len(body) > maxRewriteBodyBytes {
 			return errors.New("rewritable response body is too large")
 		}
-		if rewriteHTMLBody {
+		switch {
+		case rewriteHTMLBody:
 			body, err = decodeHTMLToUTF8(body, response.Header.Get("Content-Type"))
 			if err != nil {
 				return err
@@ -506,8 +627,15 @@ func writeProxyResponse(w http.ResponseWriter, incoming *http.Request, response 
 			}
 			w.Header().Set("Content-Type", utf8ContentType(response.Header.Get("Content-Type")))
 			w.Header().Set("Content-Security-Policy", proxyContentSecurityPolicy)
-		} else {
+		case rewriteCSSBody:
 			body = rewriteCSS(body, target)
+		case rewriteHLSBody:
+			body = rewriteHLSManifest(body, target)
+		case rewriteDASHBody:
+			body, err = rewriteDASHManifest(body, target)
+			if err != nil {
+				return err
+			}
 		}
 		w.Header().Del("Content-Encoding")
 		w.Header().Del("ETag")
@@ -518,10 +646,56 @@ func writeProxyResponse(w http.ResponseWriter, incoming *http.Request, response 
 		return err
 	}
 
-	w.Header().Del("Content-Length")
+	setStreamingContentLength(w.Header(), response)
 	w.WriteHeader(response.StatusCode)
-	_, err := io.Copy(w, response.Body)
+	return copyProxyBody(w, response.Body, partialResponse || strings.HasPrefix(contentType, "text/event-stream"))
+}
+
+var proxyCopyBufferPool = sync.Pool{New: func() any {
+	buffer := make([]byte, 128<<10)
+	return &buffer
+}}
+
+type flushingWriter struct {
+	writer     io.Writer
+	controller *http.ResponseController
+}
+
+func (writer flushingWriter) Write(payload []byte) (int, error) {
+	written, err := writer.writer.Write(payload)
+	if written > 0 {
+		if flushErr := writer.controller.Flush(); err == nil && flushErr != nil && !errors.Is(flushErr, http.ErrNotSupported) {
+			err = flushErr
+		}
+	}
+	return written, err
+}
+
+func copyProxyBody(w http.ResponseWriter, body io.Reader, flush bool) error {
+	buffer := proxyCopyBufferPool.Get().(*[]byte)
+	defer proxyCopyBufferPool.Put(buffer)
+	var destination io.Writer = w
+	if flush {
+		destination = flushingWriter{writer: w, controller: http.NewResponseController(w)}
+	}
+	_, err := io.CopyBuffer(destination, body, *buffer)
 	return err
+}
+
+func setStreamingContentLength(headers http.Header, response *http.Response) {
+	if response.Uncompressed || response.ContentLength < 0 {
+		headers.Del("Content-Length")
+		return
+	}
+	if response.ContentLength > 0 {
+		headers.Set("Content-Length", strconv.FormatInt(response.ContentLength, 10))
+		return
+	}
+	// Preserve an explicit zero from the origin, but do not infer Content-Length:
+	// 0 for synthetic responses whose body length was not populated.
+	if response.Header.Get("Content-Length") == "" {
+		headers.Del("Content-Length")
+	}
 }
 
 func decodeHTMLToUTF8(body []byte, contentType string) ([]byte, error) {
@@ -557,11 +731,12 @@ func copyResponseHeaders(destination, source http.Header) {
 		"content-security-policy": true, "content-security-policy-report-only": true, "x-frame-options": true,
 		"cross-origin-opener-policy": true, "cross-origin-embedder-policy": true, "cross-origin-resource-policy": true,
 		"origin-agent-cluster": true, "clear-site-data": true, "strict-transport-security": true, "link": true,
-		"service-worker-allowed": true,
-		"www-authenticate":       true, "access-control-allow-origin": true, "access-control-allow-credentials": true,
+		"service-worker-allowed": true, "alt-svc": true,
+		"www-authenticate": true, "access-control-allow-origin": true, "access-control-allow-credentials": true,
 	}
 	for name, values := range source {
-		if blocked[strings.ToLower(name)] {
+		lower := strings.ToLower(name)
+		if blocked[lower] || lower == "x-owu-cache" || strings.HasPrefix(lower, "x-accel-") || lower == "x-sendfile" {
 			continue
 		}
 		for _, value := range values {
@@ -570,8 +745,304 @@ func copyResponseHeaders(destination, source http.Header) {
 	}
 }
 
-func rewriteResponseHeaders(headers http.Header, response *http.Response, target *url.URL, token string, secure bool) {
-	headers.Set("Cache-Control", "private, no-store")
+type mediaCacheDecision struct {
+	browserMaxAge int
+	sharedMaxAge  int
+	immutable     bool
+}
+
+type cacheControlDirectives struct {
+	public    bool
+	private   bool
+	noStore   bool
+	noCache   bool
+	immutable bool
+	invalid   bool
+	maxAge    *int64
+	sharedAge *int64
+}
+
+func mediaCacheDecisionFor(incoming *http.Request, response *http.Response, target *url.URL, token string, unsafeRewrite bool, maxAge time.Duration) mediaCacheDecision {
+	if maxAge <= 0 || unsafeRewrite || (incoming.Method != http.MethodGet && incoming.Method != http.MethodHead) {
+		return mediaCacheDecision{}
+	}
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusPartialContent {
+		return mediaCacheDecision{}
+	}
+	if !isMediaOrStaticContent(response.Header.Get("Content-Type"), target.Path) {
+		return mediaCacheDecision{}
+	}
+	if strings.Contains(strings.ToLower(response.Header.Get("Content-Disposition")), "attachment") {
+		return mediaCacheDecision{}
+	}
+	if hasTargetCookie(incoming, token) || len(response.Header.Values("Set-Cookie")) != 0 || requestBypassesCache(incoming.Header) {
+		return mediaCacheDecision{}
+	}
+
+	directives := parseCacheControl(response.Header.Values("Cache-Control"))
+	if directives.invalid || directives.private || directives.noStore || directives.noCache {
+		return mediaCacheDecision{}
+	}
+	sharedTTL, sharedOK := sharedCacheTTL(directives, maxAge)
+	browserTTL, browserOK := browserCacheTTL(directives, maxAge)
+	if !sharedOK && !browserOK {
+		return mediaCacheDecision{}
+	}
+	if isMediaManifest(response.Header.Get("Content-Type"), target.Path) {
+		if sharedTTL > manifestCacheMaxAge {
+			sharedTTL = manifestCacheMaxAge
+		}
+		if browserTTL > manifestCacheMaxAge {
+			browserTTL = manifestCacheMaxAge
+		}
+	}
+	if sharedOK {
+		age, valid := responseCacheAge(response.Header.Values("Age"))
+		if !valid || age >= sharedTTL {
+			sharedOK = false
+			sharedTTL = 0
+		} else {
+			sharedTTL -= age
+		}
+	}
+	decision := mediaCacheDecision{browserMaxAge: int(browserTTL / time.Second), immutable: directives.immutable && browserOK}
+	partial := response.StatusCode == http.StatusPartialContent || response.Header.Get("Content-Range") != "" || incoming.Header.Get("Range") != ""
+	if sharedOK && !partial && cacheVaryIsSafe(response.Header.Values("Vary")) {
+		decision.sharedMaxAge = int(sharedTTL / time.Second)
+	}
+	return decision
+}
+
+func hasTargetCookie(request *http.Request, token string) bool {
+	prefix := cookiePrefix(token)
+	for _, cookie := range request.Cookies() {
+		if strings.HasPrefix(cookie.Name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func requestBypassesCache(headers http.Header) bool {
+	directives := parseCacheControl(headers.Values("Cache-Control"))
+	if directives.invalid || directives.noCache || directives.noStore || directives.maxAge != nil && *directives.maxAge <= 0 {
+		return true
+	}
+	return strings.Contains(strings.ToLower(strings.Join(headers.Values("Pragma"), ",")), "no-cache")
+}
+
+func parseCacheControl(values []string) cacheControlDirectives {
+	var result cacheControlDirectives
+	for _, value := range values {
+		for _, rawDirective := range strings.Split(value, ",") {
+			name, rawValue, found := strings.Cut(strings.TrimSpace(rawDirective), "=")
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case "public":
+				result.public = true
+			case "private":
+				result.private = true
+			case "no-store":
+				result.noStore = true
+			case "no-cache":
+				result.noCache = true
+			case "immutable":
+				result.immutable = true
+			case "max-age":
+				if found {
+					if result.maxAge != nil {
+						result.invalid = true
+					} else {
+						result.maxAge = cacheSeconds(rawValue)
+					}
+				}
+			case "s-maxage":
+				if found {
+					if result.sharedAge != nil {
+						result.invalid = true
+					} else {
+						result.sharedAge = cacheSeconds(rawValue)
+					}
+				}
+			}
+		}
+	}
+	return result
+}
+
+func cacheSeconds(raw string) *int64 {
+	value, err := strconv.ParseInt(strings.Trim(strings.TrimSpace(raw), `"`), 10, 64)
+	if err != nil {
+		value = -1
+	}
+	return &value
+}
+
+func sharedCacheTTL(directives cacheControlDirectives, cap time.Duration) (time.Duration, bool) {
+	var seconds int64
+	switch {
+	case directives.sharedAge != nil:
+		seconds = *directives.sharedAge
+	case directives.maxAge != nil:
+		seconds = *directives.maxAge
+	case directives.public:
+		seconds = 60
+	default:
+		return 0, false
+	}
+	return cappedCacheTTL(seconds, cap)
+}
+
+func browserCacheTTL(directives cacheControlDirectives, cap time.Duration) (time.Duration, bool) {
+	if directives.maxAge != nil {
+		return cappedCacheTTL(*directives.maxAge, cap)
+	}
+	if directives.public {
+		return cappedCacheTTL(60, cap)
+	}
+	return 0, false
+}
+
+func cappedCacheTTL(seconds int64, cap time.Duration) (time.Duration, bool) {
+	if seconds <= 0 {
+		return 0, false
+	}
+	var ttl time.Duration
+	if seconds > int64((24*time.Hour)/time.Second) {
+		ttl = cap
+	} else {
+		ttl = time.Duration(seconds) * time.Second
+		if ttl > cap {
+			ttl = cap
+		}
+	}
+	return ttl, ttl >= time.Second
+}
+
+func cacheVaryIsSafe(values []string) bool {
+	for _, value := range values {
+		for _, rawName := range strings.Split(value, ",") {
+			name := strings.ToLower(strings.TrimSpace(rawName))
+			if name != "" && name != "accept-encoding" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func responseCacheAge(values []string) (time.Duration, bool) {
+	if len(values) == 0 {
+		return 0, true
+	}
+	if len(values) != 1 {
+		return 0, false
+	}
+	seconds, err := strconv.ParseInt(strings.TrimSpace(values[0]), 10, 64)
+	if err != nil || seconds < 0 || seconds > int64((24*time.Hour)/time.Second) {
+		return 0, false
+	}
+	return time.Duration(seconds) * time.Second, true
+}
+
+func isMediaOrStaticContent(contentType, path string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	}
+	mediaType = strings.ToLower(mediaType)
+	if strings.HasPrefix(mediaType, "video/") || strings.HasPrefix(mediaType, "audio/") || strings.HasPrefix(mediaType, "image/") || strings.HasPrefix(mediaType, "font/") {
+		return true
+	}
+	switch mediaType {
+	case "text/css", "application/javascript", "application/x-javascript", "text/javascript", "application/wasm",
+		"application/font-woff", "application/vnd.ms-fontobject", "application/vnd.apple.mpegurl",
+		"application/x-mpegurl", "application/dash+xml":
+		return true
+	case "application/octet-stream", "binary/octet-stream":
+		return hasMediaExtension(path)
+	default:
+		return false
+	}
+}
+
+func hasMediaExtension(path string) bool {
+	lower := strings.ToLower(path)
+	for _, extension := range []string{".mp4", ".m4s", ".flv", ".webm", ".ts", ".m3u8", ".mpd", ".aac", ".mp3", ".m4a", ".ogg", ".wav", ".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif", ".svg", ".woff", ".woff2", ".ttf", ".otf", ".js", ".wasm"} {
+		if strings.HasSuffix(lower, extension) {
+			return true
+		}
+	}
+	return false
+}
+
+func isMediaManifest(contentType, path string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if mediaType == "application/vnd.apple.mpegurl" || mediaType == "application/x-mpegurl" || mediaType == "application/dash+xml" {
+		return true
+	}
+	lower := strings.ToLower(path)
+	return strings.HasSuffix(lower, ".m3u8") || strings.HasSuffix(lower, ".mpd")
+}
+
+func isHLSManifestContent(contentType, path string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	switch mediaType {
+	case "application/vnd.apple.mpegurl", "application/x-mpegurl", "application/mpegurl", "audio/mpegurl", "audio/x-mpegurl":
+		return true
+	case "", "application/octet-stream", "binary/octet-stream", "text/plain":
+		return strings.HasSuffix(strings.ToLower(path), ".m3u8")
+	default:
+		return false
+	}
+}
+
+func isDASHManifestContent(contentType, path string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if mediaType == "application/dash+xml" {
+		return true
+	}
+	if mediaType == "" || mediaType == "application/octet-stream" || mediaType == "binary/octet-stream" || mediaType == "text/plain" || mediaType == "application/xml" || mediaType == "text/xml" {
+		return strings.HasSuffix(strings.ToLower(path), ".mpd")
+	}
+	return false
+}
+
+func isStreamMediaContent(contentType, path string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if strings.HasPrefix(mediaType, "video/") || strings.HasPrefix(mediaType, "audio/") {
+		return true
+	}
+	if mediaType != "application/octet-stream" && mediaType != "binary/octet-stream" {
+		return false
+	}
+	lower := strings.ToLower(path)
+	for _, extension := range []string{".mp4", ".m4s", ".flv", ".webm", ".ts", ".aac", ".mp3", ".m4a", ".ogg", ".wav"} {
+		if strings.HasSuffix(lower, extension) {
+			return true
+		}
+	}
+	return false
+}
+
+func rewriteResponseHeaders(headers http.Header, response *http.Response, target *url.URL, token string, secure bool, cache mediaCacheDecision) {
+	headers.Del("X-OWU-Cache")
+	headers.Del("X-Accel-Expires")
+	if cache.browserMaxAge > 0 {
+		value := "private, max-age=" + strconv.Itoa(cache.browserMaxAge)
+		if cache.immutable {
+			value += ", immutable"
+		}
+		headers.Set("Cache-Control", value)
+	} else {
+		headers.Set("Cache-Control", "private, no-store")
+	}
+	if cache.sharedMaxAge > 0 {
+		// Nginx treats this marker as the only permission to store a response.
+		// The target cannot forge it because copyResponseHeaders strips both it
+		// and every X-Accel-* header before this policy decision runs.
+		headers.Set("X-OWU-Cache", "public-media")
+		headers.Set("X-Accel-Expires", strconv.Itoa(cache.sharedMaxAge))
+	}
 	// same-origin exposes only the OWU route to OWU itself. It is required for
 	// the canonical fallback of root-relative module and runtime requests; the
 	// outbound proxy rewrites the value to the target origin before forwarding.

@@ -13,6 +13,7 @@ EnvironmentFile=-/etc/owu/owu-proxy.env
 ExecStart=/usr/local/bin/owu-proxy
 Restart=on-failure
 RestartSec=3
+LimitNOFILE=8192
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true

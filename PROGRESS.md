@@ -16,6 +16,10 @@ personal browser proxy, and the companion macOS TCP client.
   loopback listeners, and ordered WSS endpoint failover.
 - [x] Multi-port Nginx templates, CI, release documentation, source archives,
   and rollback-oriented production deployment.
+- [x] Safe public media/static caching and HTTP/2/keepalive tuning for
+  Douyin/Bilibili page startup, with explicit Range/206 cache isolation.
+- [x] HLS and standard DASH manifest URL rewriting for media that crosses CDN
+  origins through playlists rather than browser-visible element attributes.
 
 ## Current compatibility iteration
 
@@ -34,6 +38,16 @@ with Level Devil used as a representative game-runtime check:
 - Node: lint, 3/3 tests, and production build passed.
 - Go 1.23: `go test ./...` and `go vet ./...` passed.
 - Nginx: shared-host and dedicated-port-80 TLS templates pass `nginx -t`.
+- Nginx media fixture: an explicitly marked public `video/mp4` returns
+  `MISS` then `HIT`; target-cookie and Set-Cookie cases remain uncached; a
+  `Range: bytes=0-1023` request reaches the cache-off path as `206`, returns
+  exactly 1024 bytes, preserves `Content-Range`, and reports `BYPASS`.
+- Chromium media run: the Bilibili home loaded 58/58 images, a representative
+  video reached `readyState=4` and buffered 50 seconds, and all 13 observed
+  partial media requests remained exact OWU-origin `206` responses. A warm
+  Douyin feed reduced DOMContentLoaded from 4036 ms to 2573 ms in the same run;
+  repeated Bilibili CSS requests dropped from 155 ms to 22/38 ms through
+  outbound connection reuse.
 - Chromium: Poki homepage stays on `/`, reload succeeds, the verification window
   observed zero failed images, game navigation preserves `/en/g/...`, and
   Level Devil reaches a nested game canvas with ten runtime scripts.

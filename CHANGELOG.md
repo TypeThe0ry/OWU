@@ -23,6 +23,11 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and operator-configured additional TLS ports.
 - Shared-host and dedicated-address Nginx profiles for secure multi-port tunnel
   entry points.
+- Explicitly marked public media/static edge caching for Douyin and
+  Bilibili workloads, with HTTP/2, upstream keepalive pools, cache locking,
+  background revalidation, and bounded disk/temp-file use.
+- HLS playlist and standard DASH manifest URL rewriting for proxied segments,
+  renditions, keys, maps, templates, initialization objects, and BaseURL trees.
 - Nginx and systemd deployment templates, automated CI, secret scanning, and
   release documentation.
 
@@ -40,5 +45,9 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   preserves Cloudflare image-resizing URLs and data URIs.
 - Disabled tunnel handshake redirects and delayed local TCP reads until a WSS
   endpoint passes its TLS and WebSocket probe.
+- Isolated Range, If-Range, and validator requests in an explicitly uncached
+  streaming Nginx path so inherited server caches cannot turn a media `206`
+  into a full `200`; target-cookie and Set-Cookie traffic also stays out of
+  cache while unrelated OWU cookies use an isolated cache key.
 
 No tagged release has been published yet.
