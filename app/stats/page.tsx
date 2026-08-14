@@ -20,12 +20,12 @@ interface StatsData {
   topSites?: TopSite[];
 }
 
-const numberFormat = new Intl.NumberFormat("zh-CN");
+const numberFormat = new Intl.NumberFormat("en-US");
 
 function formatTime(value?: string): string {
   if (!value) return "–";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "–" : date.toLocaleString("zh-CN", { hour12: false });
+  return Number.isNaN(date.getTime()) ? "–" : date.toLocaleString("en-US", { hour12: false });
 }
 
 export default function StatsPage() {
@@ -86,44 +86,44 @@ export default function StatsPage() {
       <section className="stats-stage" aria-labelledby="stats-title">
         <div className="stats-card">
           <div className="stats-head">
-            <h1 id="stats-title">使用统计</h1>
+            <h1 id="stats-title">Usage Statistics</h1>
             <span className="stats-updated" aria-live="polite">
-              {failed ? "加载失败，稍后重试" : data ? `更新于 ${formatTime(data.updatedAt)}` : "加载中…"}
+              {failed ? "Failed to load — retrying" : data ? `Updated ${formatTime(data.updatedAt)}` : "Loading…"}
             </span>
           </div>
 
           {!enabled ? (
-            <p className="stats-empty">统计未启用：{data?.message ?? "请联系管理员配置。"}</p>
+            <p className="stats-empty">Statistics are not enabled: {data?.message ?? "Contact the operator to enable them."}</p>
           ) : (
             <>
               <div className="stats-grid">
                 <section className="stat-card">
-                  <div className="stat-label">访问人数</div>
+                  <div className="stat-label">Visitors</div>
                   <div className="stat-value">{numberFormat.format(data?.visitorsTotal ?? 0)}</div>
-                  <div className="stat-sub">今日 {numberFormat.format(data?.visitorsToday ?? 0)} 人 · 匿名累计</div>
+                  <div className="stat-sub">{numberFormat.format(data?.visitorsToday ?? 0)} today · anonymous total</div>
                 </section>
                 <section className="stat-card">
-                  <div className="stat-label">使用次数</div>
+                  <div className="stat-label">Uses</div>
                   <div className="stat-value">{numberFormat.format(data?.usesTotal ?? 0)}</div>
-                  <div className="stat-sub">今日 {numberFormat.format(data?.usesToday ?? 0)} 次</div>
+                  <div className="stat-sub">{numberFormat.format(data?.usesToday ?? 0)} today</div>
                 </section>
                 <section className="stat-card">
-                  <div className="stat-label">统计起始</div>
+                  <div className="stat-label">Counting since</div>
                   <div className="stat-value stat-value-date">{formatTime(data?.since)}</div>
-                  <div className="stat-sub">每 10 秒自动刷新</div>
+                  <div className="stat-sub">Auto-refreshes every 10 seconds</div>
                 </section>
               </div>
 
-              <h2 className="stats-section-title">用户最常访问的网站</h2>
+              <h2 className="stats-section-title">Most visited websites</h2>
               {topSites.length === 0 ? (
-                <p className="stats-empty">暂无数据</p>
+                <p className="stats-empty">No data yet</p>
               ) : (
                 <ol className="stats-sites">
                   {topSites.map((entry, index) => (
                     <li key={entry.site}>
                       <span className="stats-rank">{index + 1}</span>
                       <span className="stats-site">{entry.site}</span>
-                      <span className="stats-count">{numberFormat.format(entry.uses)} 次</span>
+                      <span className="stats-count">{numberFormat.format(entry.uses)} uses</span>
                     </li>
                   ))}
                 </ol>
@@ -132,7 +132,8 @@ export default function StatsPage() {
           )}
 
           <p className="stats-note">
-            统计为匿名方式：仅以不可逆哈希标识访问者，不保存 IP 等可识别信息；目标网站仅记录域名与使用次数。
+            Statistics are anonymous: visitors are identified only by an irreversible hash and no IP or other identifying
+            data is stored; destination websites are recorded by domain and usage count only.
           </p>
         </div>
       </section>

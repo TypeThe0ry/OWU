@@ -656,11 +656,11 @@ func (s *Server) handleStatsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 const statsPageHTML = `<!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>OWU · 使用统计</title>
+<title>OWU · Usage Statistics</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -692,43 +692,44 @@ const statsPageHTML = `<!doctype html>
 <body>
 <main class="card">
   <header>
-    <h1>OWU 使用统计</h1>
-    <span class="updated" id="updated">加载中…</span>
+    <h1>OWU Usage Statistics</h1>
+    <span class="updated" id="updated">Loading…</span>
   </header>
   <div class="grid">
-    <section class="metric"><div class="label">访问人数（累计）</div><div class="value" id="visitorsTotal">&ndash;</div><div class="sub" id="visitorsToday">今日 &ndash;</div></section>
-    <section class="metric"><div class="label">使用次数（累计）</div><div class="value" id="usesTotal">&ndash;</div><div class="sub" id="usesToday">今日 &ndash;</div></section>
-    <section class="metric"><div class="label">统计起始</div><div class="value" id="since" style="font-size:20px;margin-top:14px">&ndash;</div><div class="sub">匿名记录</div></section>
+    <section class="metric"><div class="label">Visitors (total)</div><div class="value" id="visitorsTotal">&ndash;</div><div class="sub" id="visitorsToday">&ndash; today</div></section>
+    <section class="metric"><div class="label">Uses (total)</div><div class="value" id="usesTotal">&ndash;</div><div class="sub" id="usesToday">&ndash; today</div></section>
+    <section class="metric"><div class="label">Counting since</div><div class="value" id="since" style="font-size:20px;margin-top:14px">&ndash;</div><div class="sub">Anonymous</div></section>
   </div>
-  <h2>用户最常访问的网站</h2>
-  <ol id="sites"><li class="empty">暂无数据</li></ol>
+  <h2>Most visited websites</h2>
+  <ol id="sites"><li class="empty">No data yet</li></ol>
   <footer>
-    统计为<b>匿名</b>方式：仅以不可逆哈希标识访问者，不保存 IP 等可识别信息；目标网站仅记录域名与使用次数。<br/>
-    <a href="/">← 返回 OWU</a>
+    Statistics are <b>anonymous</b>: visitors are identified only by an irreversible hash and no IP or other
+    identifying data is stored; destination websites are recorded by domain and usage count only.<br/>
+    <a href="/">← Back to OWU</a>
   </footer>
 </main>
 <script>
-const fmt = new Intl.NumberFormat("zh-CN");
+const fmt = new Intl.NumberFormat("en-US");
 const byId = (id) => document.getElementById(id);
 function fmtTime(value) {
   if (!value) return "&ndash;";
   const date = new Date(value);
-  return isNaN(date) ? "&ndash;" : date.toLocaleString("zh-CN", { hour12: false });
+  return isNaN(date) ? "&ndash;" : date.toLocaleString("en-US", { hour12: false });
 }
 async function refresh() {
   try {
     const response = await fetch("/stats/api", { cache: "no-store" });
     const data = await response.json();
-    if (!data.enabled) { byId("updated").textContent = "统计未启用"; return; }
+    if (!data.enabled) { byId("updated").textContent = "Statistics not enabled"; return; }
     byId("visitorsTotal").textContent = fmt.format(data.visitorsTotal || 0);
-    byId("visitorsToday").textContent = "今日 " + fmt.format(data.visitorsToday || 0);
+    byId("visitorsToday").textContent = fmt.format(data.visitorsToday || 0) + " today";
     byId("usesTotal").textContent = fmt.format(data.usesTotal || 0);
-    byId("usesToday").textContent = "今日 " + fmt.format(data.usesToday || 0);
+    byId("usesToday").textContent = fmt.format(data.usesToday || 0) + " today";
     byId("since").textContent = fmtTime(data.since);
-    byId("updated").textContent = "更新于 " + fmtTime(data.updatedAt);
+    byId("updated").textContent = "Updated at " + fmtTime(data.updatedAt);
     const list = byId("sites");
     if (!data.topSites || data.topSites.length === 0) {
-      list.innerHTML = '<li class="empty">暂无数据</li>';
+      list.innerHTML = '<li class="empty">No data yet</li>';
       return;
     }
     list.innerHTML = "";
@@ -742,12 +743,12 @@ async function refresh() {
       site.textContent = entry.site;
       const uses = document.createElement("span");
       uses.className = "uses";
-      uses.textContent = fmt.format(entry.uses) + " 次";
+      uses.textContent = fmt.format(entry.uses) + " uses";
       item.append(rank, site, uses);
       list.appendChild(item);
     });
   } catch {
-    byId("updated").textContent = "加载失败，稍后重试";
+    byId("updated").textContent = "Failed to load — retrying";
   }
 }
 refresh();
