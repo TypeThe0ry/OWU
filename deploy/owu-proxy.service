@@ -19,6 +19,8 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectHome=true
 ProtectSystem=strict
+# Anonymous usage statistics persist under /var/lib/owu (owned by the service user).
+ReadWritePaths=/var/lib/owu
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

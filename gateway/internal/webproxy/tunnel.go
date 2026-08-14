@@ -84,6 +84,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "The tunnel resource is not configured.")
 		return
 	}
+	s.recordUse(r, "", "")
 
 	dialContext, cancelDial := context.WithTimeout(r.Context(), 10*time.Second)
 	upstream, err := (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext(dialContext, "tcp", resource.Address())

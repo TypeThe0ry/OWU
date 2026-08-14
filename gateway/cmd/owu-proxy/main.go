@@ -33,6 +33,7 @@ func main() {
 		if err := server.Shutdown(ctx); err != nil {
 			log.Printf("graceful shutdown: %v", err)
 		}
+		handler.Close()
 	}()
 
 	log.Printf("OWU personal web proxy listening on %s", config.ListenAddr)

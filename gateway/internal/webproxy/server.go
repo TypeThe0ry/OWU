@@ -10,18 +10,21 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"permit-gateway/internal/safety"
+	"permit-gateway/internal/stats"
 
 	"golang.org/x/net/html/charset"
 )
@@ -45,6 +48,7 @@ type Config struct {
 	TunnelResources   map[string]TCPResource
 	TransportPoolSize int
 	MediaCacheMaxAge  time.Duration
+	StatsFile         string
 }
 
 func LoadConfig() Config {
@@ -62,6 +66,7 @@ func LoadConfig() Config {
 		TunnelResources:   resources,
 		TransportPoolSize: positiveIntEnv("OWU_TRANSPORT_POOL_SIZE", defaultTransportPoolSize),
 		MediaCacheMaxAge:  durationEnv("OWU_MEDIA_CACHE_MAX_AGE", defaultMediaCacheMaxAge),
+		StatsFile:         strings.TrimSpace(os.Getenv("OWU_STATS_FILE")),
 	}
 }
 
@@ -75,6 +80,7 @@ type Server struct {
 	transportSequence uint64
 	transportPoolSize int
 	mediaCacheMaxAge  time.Duration
+	stats             *stats.Recorder
 }
 
 type transportEntry struct {
@@ -94,6 +100,16 @@ func New(config Config) *Server {
 	if mediaCacheMaxAge == 0 {
 		mediaCacheMaxAge = defaultMediaCacheMaxAge
 	}
+	var recorder *stats.Recorder
+	if config.StatsFile != "" {
+		created, err := stats.New(config.StatsFile)
+		if err != nil {
+			log.Printf("OWU usage statistics disabled: %v", err)
+		} else {
+			created.Start(30 * time.Second)
+			recorder = created
+		}
+	}
 	return &Server{
 		safety:            safePolicy(config.DemoAllowedOrigin),
 		demoAllowedOrigin: config.DemoAllowedOrigin,
@@ -102,6 +118,7 @@ func New(config Config) *Server {
 		transports:        make(map[string]*transportEntry),
 		transportPoolSize: transportPoolSize,
 		mediaCacheMaxAge:  mediaCacheMaxAge,
+		stats:             recorder,
 	}
 }
 
@@ -149,6 +166,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.proxyHTTP(w, r, virtualTarget, virtualToken)
 	case r.URL.Path == "/healthz":
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	case r.URL.Path == "/stats":
+		s.handleStatsPage(w, r)
+	case r.URL.Path == "/stats/api":
+		s.handleStatsAPI(w, r)
 	case strings.HasPrefix(r.URL.Path, browsePrefix):
 		s.handleBrowse(w, r)
 	case strings.HasPrefix(r.URL.Path, socketPrefix):
@@ -200,6 +221,7 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, target *url.U
 		return
 	}
 	cancel()
+	s.recordUse(r, target.Hostname(), target.Path)
 	ctx := r.Context()
 
 	body, err := outboundRequestBody(w, r)
@@ -282,6 +304,7 @@ func (s *Server) handleSocket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "This destination is not a public Internet address.")
 		return
 	}
+	s.recordUse(r, mapped.Hostname(), mapped.Path)
 
 	transport := s.transportFor(&mapped)
 	proxy := &httputil.ReverseProxy{
@@ -574,6 +597,164 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"message": message}})
 }
+
+// Close stops background statistic flushing.
+func (s *Server) Close() {
+	if s.stats != nil {
+		s.stats.Close()
+	}
+}
+
+// recordUse marks anonymous activity. Subresource requests still identify an
+// active visitor but do not inflate the usage totals or the site ranking.
+func (s *Server) recordUse(r *http.Request, site, path string) {
+	if s.stats == nil {
+		return
+	}
+	s.stats.Record(s.stats.VisitorID(r.RemoteAddr), stats.NormalizeSite(site), !hasMediaExtension(path))
+}
+
+func (s *Server) handleStatsAPI(w http.ResponseWriter, r *http.Request) {
+	if s.stats == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "message": "Usage statistics are not configured."})
+		return
+	}
+	snapshot := s.stats.Snapshot()
+	type siteCount struct {
+		Site string `json:"site"`
+		Uses int64  `json:"uses"`
+	}
+	top := make([]siteCount, 0, len(snapshot.Sites))
+	for site, uses := range snapshot.Sites {
+		top = append(top, siteCount{Site: site, Uses: uses})
+	}
+	sort.Slice(top, func(i, j int) bool {
+		if top[i].Uses != top[j].Uses {
+			return top[i].Uses > top[j].Uses
+		}
+		return top[i].Site < top[j].Site
+	})
+	if len(top) > 20 {
+		top = top[:20]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":       true,
+		"since":         snapshot.Since,
+		"updatedAt":     snapshot.UpdatedAt,
+		"visitorsTotal": len(snapshot.Visitors),
+		"visitorsToday": s.stats.VisitorsToday(snapshot),
+		"usesTotal":     snapshot.UsesTotal,
+		"usesToday":     snapshot.UsesToday,
+		"topSites":      top,
+	})
+}
+
+func (s *Server) handleStatsPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(w, statsPageHTML)
+}
+
+const statsPageHTML = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>OWU · 使用统计</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(1200px 600px at 15% -10%, rgba(56,132,255,.16), transparent 60%), radial-gradient(1000px 500px at 110% 20%, rgba(168,85,247,.14), transparent 55%), #0b0f17;
+    color: #e7ecf5; display: flex; align-items: center; justify-content: center; padding: 32px 16px;
+  }
+  .card { width: 100%; max-width: 720px; background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.09); border-radius: 24px; padding: 28px; backdrop-filter: blur(18px); box-shadow: 0 24px 60px rgba(0,0,0,.35); }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .02em; }
+  .updated { font-size: 12px; color: #8b96ab; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+  .metric { background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); border-radius: 16px; padding: 18px; }
+  .metric .label { font-size: 13px; color: #9aa6bd; }
+  .metric .value { font-size: 30px; font-weight: 650; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .metric .sub { font-size: 12px; color: #6f7c94; margin-top: 4px; }
+  h2 { font-size: 15px; margin: 26px 0 12px; color: #c6d0e2; }
+  ol { margin: 0; padding: 0; list-style: none; }
+  li { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 12px; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.06); margin-bottom: 8px; }
+  .rank { width: 26px; height: 26px; border-radius: 8px; background: rgba(56,132,255,.18); color: #7fb0ff; display: grid; place-items: center; font-size: 13px; font-weight: 650; flex: none; }
+  .site { flex: 1; font-size: 14px; word-break: break-all; }
+  .uses { font-size: 13px; color: #8b96ab; font-variant-numeric: tabular-nums; }
+  .empty { color: #6f7c94; font-size: 14px; padding: 14px 4px; }
+  footer { margin-top: 22px; font-size: 12px; color: #6f7c94; line-height: 1.7; border-top: 1px solid rgba(255,255,255,.07); padding-top: 16px; }
+  a { color: #7fb0ff; text-decoration: none; }
+</style>
+</head>
+<body>
+<main class="card">
+  <header>
+    <h1>OWU 使用统计</h1>
+    <span class="updated" id="updated">加载中…</span>
+  </header>
+  <div class="grid">
+    <section class="metric"><div class="label">访问人数（累计）</div><div class="value" id="visitorsTotal">&ndash;</div><div class="sub" id="visitorsToday">今日 &ndash;</div></section>
+    <section class="metric"><div class="label">使用次数（累计）</div><div class="value" id="usesTotal">&ndash;</div><div class="sub" id="usesToday">今日 &ndash;</div></section>
+    <section class="metric"><div class="label">统计起始</div><div class="value" id="since" style="font-size:20px;margin-top:14px">&ndash;</div><div class="sub">匿名记录</div></section>
+  </div>
+  <h2>用户最常访问的网站</h2>
+  <ol id="sites"><li class="empty">暂无数据</li></ol>
+  <footer>
+    统计为<b>匿名</b>方式：仅以不可逆哈希标识访问者，不保存 IP 等可识别信息；目标网站仅记录域名与使用次数。<br/>
+    <a href="/">← 返回 OWU</a>
+  </footer>
+</main>
+<script>
+const fmt = new Intl.NumberFormat("zh-CN");
+const byId = (id) => document.getElementById(id);
+function fmtTime(value) {
+  if (!value) return "&ndash;";
+  const date = new Date(value);
+  return isNaN(date) ? "&ndash;" : date.toLocaleString("zh-CN", { hour12: false });
+}
+async function refresh() {
+  try {
+    const response = await fetch("/stats/api", { cache: "no-store" });
+    const data = await response.json();
+    if (!data.enabled) { byId("updated").textContent = "统计未启用"; return; }
+    byId("visitorsTotal").textContent = fmt.format(data.visitorsTotal || 0);
+    byId("visitorsToday").textContent = "今日 " + fmt.format(data.visitorsToday || 0);
+    byId("usesTotal").textContent = fmt.format(data.usesTotal || 0);
+    byId("usesToday").textContent = "今日 " + fmt.format(data.usesToday || 0);
+    byId("since").textContent = fmtTime(data.since);
+    byId("updated").textContent = "更新于 " + fmtTime(data.updatedAt);
+    const list = byId("sites");
+    if (!data.topSites || data.topSites.length === 0) {
+      list.innerHTML = '<li class="empty">暂无数据</li>';
+      return;
+    }
+    list.innerHTML = "";
+    data.topSites.forEach((entry, index) => {
+      const item = document.createElement("li");
+      const rank = document.createElement("span");
+      rank.className = "rank";
+      rank.textContent = String(index + 1);
+      const site = document.createElement("span");
+      site.className = "site";
+      site.textContent = entry.site;
+      const uses = document.createElement("span");
+      uses.className = "uses";
+      uses.textContent = fmt.format(entry.uses) + " 次";
+      item.append(rank, site, uses);
+      list.appendChild(item);
+    });
+  } catch {
+    byId("updated").textContent = "加载失败，稍后重试";
+  }
+}
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>`
 
 func writeProxyResponse(w http.ResponseWriter, incoming *http.Request, response *http.Response, target *url.URL, token string) error {
 	return writeProxyResponseWithCache(w, incoming, response, target, token, defaultMediaCacheMaxAge)

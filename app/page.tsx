@@ -1,12 +1,18 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
+import ThemeToggle from "./theme-toggle";
+
+interface TopSite {
+  site: string;
+  uses: number;
+}
 
 function normalizeWebsite(value: string): { url?: string; error?: string } {
   const candidate = value.trim();
   if (!candidate) return { error: "Enter a website address." };
 
-  const normalized = /^[a-z][a-z\d+.-]*:\/\//i.test(candidate)
+  const normalized = /^[a-z][a-zd+.-]*:///i.test(candidate)
     ? candidate
     : `https://${candidate}`;
 
@@ -44,14 +50,22 @@ function proxyAddress(value: string): { url?: string; error?: string } {
 export default function Home() {
   const [target, setTarget] = useState("");
   const [message, setMessage] = useState("");
+  const [topSites, setTopSites] = useState<TopSite[] | null>(null);
 
-  function toggleTheme() {
-    const current = document.documentElement.dataset.theme
-      ?? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-    const next = current === "dark" ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    window.localStorage.setItem("owu-theme", next);
-  }
+  useEffect(() => {
+    let active = true;
+    fetch("/stats/api", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => {
+        if (active && data.enabled && Array.isArray(data.topSites)) {
+          setTopSites(data.topSites.slice(0, 6));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -82,23 +96,13 @@ export default function Home() {
           </span>
         </div>
 
-        <button
-          className="theme-toggle"
-          type="button"
-          onClick={toggleTheme}
-          aria-label="Toggle color theme"
-        >
-          <span className="theme-track" aria-hidden="true">
-            <span className="theme-thumb">
-              <span className="theme-icon-light">☀</span>
-              <span className="theme-icon-dark">☾</span>
-            </span>
-          </span>
-          <span className="theme-label" aria-hidden="true">
-            <span className="theme-label-light">Light</span>
-            <span className="theme-label-dark">Dark</span>
-          </span>
-        </button>
+        <div className="topbar-actions">
+          <a className="stats-link" href="/stats" aria-label="View usage statistics">
+            <i aria-hidden="true">▦</i>
+            <span>Stats</span>
+          </a>
+          <ThemeToggle />
+        </div>
       </header>
 
       <section className="hero" aria-labelledby="page-title">
@@ -145,6 +149,20 @@ export default function Home() {
             {message}
           </p>
         </form>
+
+        {topSites && topSites.length > 0 && (
+          <section className="popular-sites" aria-label="Popular websites">
+            <span className="popular-label">Everyone is browsing</span>
+            <div className="popular-chips">
+              {topSites.map((entry) => (
+                <span className="popular-chip" key={entry.site}>
+                  <span className="popular-host">{entry.site}</span>
+                  <span className="popular-count">{entry.uses}</span>
+                </span>
+              ))}
+            </div>
+          </section>
+        )}
 
         <p className="direct-note" id="direct-note">
           <span aria-hidden="true">◇</span>
