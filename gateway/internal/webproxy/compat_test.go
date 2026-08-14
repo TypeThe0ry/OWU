@@ -43,6 +43,40 @@ func TestClientBootstrapKeepsWSSAndBridgesCookies(t *testing.T) {
 	if strings.Contains(bootstrap, `const targetScheme=parsed.protocol==="https:"?"wss:":"ws:"`) {
 		t.Fatal("bootstrap still downgrades an explicit wss:// URL to ws://")
 	}
+	if !strings.Contains(bootstrap, `const parseSrcset=`) || !strings.Contains(bootstrap, `rawURL.replace(/,+$/,""`) {
+		t.Fatal("bootstrap is missing the comma-safe srcset parser")
+	}
+	if strings.Contains(bootstrap, `String(value).split(",")`) {
+		t.Fatal("bootstrap still splits srcset candidates at commas inside URLs")
+	}
+	if !strings.Contains(bootstrap, `const socketProxyURL=`) || !strings.Contains(bootstrap, `targetURL(origin,path,parsed.search,parsed.hash)`) {
+		t.Fatal("bootstrap is missing collision-safe canonical URL decoding")
+	}
+}
+
+func TestRewriteSrcsetPreservesCommasInsideImageURLs(t *testing.T) {
+	base := mustURL(t, "https://poki.com/app/page")
+	first := "https://img.poki-cdn.com/cdn-cgi/image/q=78,scq=50,width=94,height=94,fit=cover,f=auto/hash/logo.png"
+	second := "https://img.poki-cdn.com/cdn-cgi/image/q=78,scq=50,width=188,height=188,fit=cover,f=auto/hash/logo.png"
+
+	got := rewriteSrcset(first+" 1x, "+second+" 2x", base)
+	want := proxyURL(mustURL(t, first)) + " 1x, " + proxyURL(mustURL(t, second)) + " 2x"
+	if got != want {
+		t.Fatalf("rewritten Cloudflare srcset = %q, want %q", got, want)
+	}
+}
+
+func TestRewriteSrcsetHandlesDataURLsAndDescriptorlessCandidates(t *testing.T) {
+	base := mustURL(t, "https://example.test/app/page")
+	dataURL := "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%3E%3C/svg%3E"
+
+	got := rewriteSrcset(dataURL+" 1x, image-a.png, image-b.png 2x", base)
+	want := dataURL + " 1x, " +
+		proxyURL(mustURL(t, "https://example.test/app/image-a.png")) + ", " +
+		proxyURL(mustURL(t, "https://example.test/app/image-b.png")) + " 2x"
+	if got != want {
+		t.Fatalf("rewritten mixed srcset = %q, want %q", got, want)
+	}
 }
 
 func TestRewriteImportMapURLs(t *testing.T) {

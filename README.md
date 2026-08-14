@@ -20,7 +20,8 @@ traffic.
 - HTTP and HTTPS targets, including explicit non-standard ports.
 - HTML, CSS, redirects, forms, cookies, Fetch, XHR, Beacon, EventSource,
   WebSocket, Worker, dynamic DOM URL attributes, and import-map rewriting.
-- SPA-friendly canonical route fallback and legacy HTML charset conversion.
+- SPA-friendly virtual document paths, canonical resource fallback, and legacy
+  HTML charset conversion.
 - Browser-password gate at Nginx; edge credentials are stripped before requests
   reach destination websites.
 - Public-address validation and DNS-pinned upstream dialing to reduce SSRF and
@@ -174,6 +175,15 @@ The templates assume these paths and ports:
 - repository release: `/www/wwwroot/owu/current`
 - Vinext UI: `127.0.0.1:3210`
 - Go proxy: `127.0.0.1:3211`
+
+The Nginx templates also contain the `__owu_origin_v1` virtual-document
+dispatcher. Keep that server-level dispatcher and its
+`@owu_virtual_document` location when adapting the templates: client-side
+routers must see the destination pathname (for example `/en/g/level-devil`),
+while reloads of that virtual path must still reach the Go proxy rather than
+the OWU UI. The marker is routing state, not an authentication credential;
+the browser-password gate still protects every request.
+
 - primary public entry: Nginx TLS on `443`
 - shared-host TLS fallback: Nginx TLS on `8080`
 - additional TLS fallbacks: Nginx TLS on `8443` and `9443`
@@ -194,8 +204,9 @@ cd ..
 ```
 
 Transfer the source/build bundle and `owu-proxy` to a versioned release
-directory on the server. Never include `.env*`, password files, private keys,
-certificates, logs, `work/`, or captured target pages.
+directory on the server. Never include populated environment files, password
+files, private keys, logs, `work/`, or captured target pages. Committed
+`.env.example` templates may be included only while they contain placeholders.
 
 ### 2. Install services
 
@@ -364,8 +375,8 @@ future `NEPacketTunnelProvider` planning.
 |---|---|---|
 | HTTP/1.1 and HTTPS websites | Supported | Any public DNS destination and valid port; upstream TLS requires TLS 1.2+. |
 | Redirects, forms, cookies | Supported | Redirects and cookies are rewritten; cookies are isolated by target-origin prefix. |
-| HTML/CSS assets and lazy-load attributes | Supported | Relative, root-relative, `srcset`, common `data-*`, CSS `url()`, and import-map references are covered. |
-| SPA navigation | Best effort | The canonical fallback and idempotent rewrite fix cover typical Vite/React/Vue-style routing, including the previously reproduced blank-page failure. |
+| HTML/CSS assets and lazy-load attributes | Supported | Relative, root-relative, comma-bearing `srcset` image URLs, common `data-*`, CSS `url()`, and import-map references are covered. |
+| SPA navigation | Best effort | Virtual document URLs preserve the destination pathname for React/Vue/Wouter-style routers; history navigation, direct reload, canonical fallback, and idempotent resource rewriting are covered. |
 | Fetch, XHR, Beacon, EventSource | Best effort | Common constructors are wrapped; code that captures pristine intrinsics or constructs URLs in unsupported native paths may escape rewriting and fail closed. |
 | WebSocket | Best effort | Upgrade and common subprotocol use work; application-specific Origin checks may reject OWU. |
 | Service Worker / PWA offline mode | Disabled | All proxied sites share the OWU browser origin, so registration is blocked and existing registrations are removed to prevent one target controlling another. |

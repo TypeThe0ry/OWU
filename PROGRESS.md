@@ -1,46 +1,51 @@
 # OWU implementation progress
 
-This log tracks the durable implementation goal for the authorized-access MVP.
+This log records the current state of Open Website Unblocker (OWU), its
+personal browser proxy, and the companion macOS TCP client.
 
-## Goal contract
+## Shipped foundation
 
-- Build a locally verifiable control plane and HTTP(S)/WebSocket gateway.
-- Keep every upstream connection bound to an explicitly registered public resource.
-- Deny anonymous arbitrary proxying, unsafe address ranges, unapproved ports, and direct browser fallbacks.
-- Connect the English web UI to the real authorization decision API.
-- Provide a macOS SwiftUI client foundation without claiming unavailable Apple entitlements.
-- Finish only when builds, policy tests, integration tests, and a Docker Compose demo pass.
+- [x] English single-address web UI with liquid-glass light and dark themes.
+- [x] Browser-password gate at Nginx and an arbitrary public HTTP/HTTPS target
+  proxy behind that gate.
+- [x] HTML, CSS, redirects, cookies, Fetch/XHR, WebSocket, Worker, dynamic DOM,
+  import-map, charset, and common SPA compatibility rewriting.
+- [x] Fixed-resource WebSocket-to-TCP tunnels for SSH, Minecraft, and other
+  operator-configured services.
+- [x] SwiftUI macOS client with Keychain credentials, certificate pinning,
+  loopback listeners, and ordered WSS endpoint failover.
+- [x] Multi-port Nginx templates, CI, release documentation, source archives,
+  and rollback-oriented production deployment.
 
-## Checkpoints
+## Current compatibility iteration
 
-- [x] Product, gateway, and macOS architecture documents completed.
-- [x] English web concept deployed as an owner-only preview.
-- [x] Go control API and resource gateway implemented.
-- [x] Web UI connected to the control API.
-- [x] macOS client foundation implemented.
-- [x] Docker Compose demo and authorized target fixture implemented.
-- [x] Security and end-to-end acceptance suite passing.
-- [x] Operator and developer runbooks updated.
+The reported Poki homepage, SPA-routing, and `srcset` regressions are fixed,
+with Level Devil used as a representative game-runtime check:
 
-## Current iteration
-
-The personal OWU deployment is protected by browser Basic Auth. The web proxy now
-rewrites static and dynamically inserted page references. The macOS client has a
-working loopback TCP-to-WSS implementation for fixed `ssh` and `minecraft`
-resource IDs; arbitrary remote destinations are not accepted by the tunnel API.
+- GET and HEAD requests no longer acquire empty request-body framing.
+- Virtual document URLs expose the destination pathname to client-side routers
+  while retaining an OWU origin marker for reload and Referer recovery.
+- `srcset` parsing preserves commas inside Cloudflare image-transform URLs and
+  data URIs.
+- Canonical resource rewriting remains idempotent, including CDN assets.
 
 ## Verification evidence
 
-- `npm test`: production web build plus 3/3 Node tests passed.
-- `npx eslint app tests`: passed.
-- Go 1.23 container: `go test ./...` and `go vet ./...` passed; gateway image built successfully.
-- Swift 5.10 container: `swift test` passed 22/22 portable core tests.
-- `docker compose up --build -d`: web, gateway, and internal demo target started; health checks passed.
-- `tests/e2e-demo.ps1`: single-input UI, same-origin BFF, one-time launch, proxied fixture response, and fail-closed denials passed.
+- Node: lint, 3/3 tests, and production build passed.
+- Go 1.23: `go test ./...` and `go vet ./...` passed.
+- Nginx: shared-host and dedicated-port-80 TLS templates pass `nginx -t`.
+- Chromium: Poki homepage stays on `/`, reload succeeds, the verification window
+  observed zero failed images, game navigation preserves `/en/g/...`, and
+  Level Devil reaches a nested game canvas with ten runtime scripts.
+- Production: unauthenticated root remains `401`; authenticated OWU UI,
+  canonical Poki route, virtual Poki reload, and Level Devil page return `200`
+  on the deployed host. TLS proxy entry points 443, 8080, 8443, and 9443 remain
+  active.
 
-Live deployment smoke tests: unauthenticated web access `401`, proxied
-`example.com` `200`, loopback target `403`, missing tunnel key `401`, unknown
-tunnel ID `404`, and the configured SSH tunnel returned
-`SSH-2.0-OpenSSH_8.0`. Apple-specific SwiftUI, Security.framework, and
-Network.framework branches still require compilation and lifecycle tests in
-Xcode on a physical Mac.
+Apple-only Network.framework lifecycle behavior still needs compilation and
+sleep/wake/network-switch testing on a physical Mac before a signed macOS
+binary release.
+
+Origin-bound advertising, identity, DRM, and child-realm SDK behaviors remain
+best effort. A target can still emit CSP or origin-pinning warnings even when
+its main application and game canvas load successfully.

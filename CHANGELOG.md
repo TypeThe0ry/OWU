@@ -32,6 +32,12 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   caused JavaScript and stylesheet requests to return a blank page.
 - Preserved target-origin cookie isolation and canonical proxy URLs during SPA
   navigation.
+- Removed empty request-body framing from GET and HEAD requests for strict edge
+  renderers, including the Poki homepage failure reproduced during testing.
+- Added virtual document URLs so SPA routers see the destination pathname while
+  reloads remain routed through OWU, plus raw-query-preserving Referer recovery.
+- Replaced comma splitting in `srcset` rewriting with a candidate parser that
+  preserves Cloudflare image-resizing URLs and data URIs.
 - Disabled tunnel handshake redirects and delayed local TCP reads until a WSS
   endpoint passes its TLS and WebSocket probe.
 

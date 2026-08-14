@@ -198,15 +198,87 @@ func rewriteReference(value string, base *url.URL) string {
 }
 
 func rewriteSrcset(value string, base *url.URL) string {
-	parts := strings.Split(value, ",")
-	for index, part := range parts {
-		fields := strings.Fields(strings.TrimSpace(part))
-		if len(fields) > 0 {
-			fields[0] = rewriteReference(fields[0], base)
-			parts[index] = strings.Join(fields, " ")
+	candidates := parseSrcset(value)
+	rewritten := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		entry := rewriteReference(candidate.url, base)
+		if candidate.descriptor != "" {
+			entry += " " + candidate.descriptor
+		}
+		rewritten = append(rewritten, entry)
+	}
+	return strings.Join(rewritten, ", ")
+}
+
+type srcsetCandidate struct {
+	url        string
+	descriptor string
+}
+
+// parseSrcset follows the URL/descriptor boundaries from the HTML srcset
+// parsing algorithm. In particular, commas inside a URL are data, not
+// candidate separators. This is common in Cloudflare image-resizing URLs such
+// as /cdn-cgi/image/q=78,scq=50,width=188/image.png.
+func parseSrcset(value string) []srcsetCandidate {
+	candidates := make([]srcsetCandidate, 0, 2)
+	for position := 0; position < len(value); {
+		for position < len(value) && (isASCIIWhitespace(value[position]) || value[position] == ',') {
+			position++
+		}
+		if position >= len(value) {
+			break
+		}
+
+		urlStart := position
+		for position < len(value) && !isASCIIWhitespace(value[position]) {
+			position++
+		}
+		rawURL := value[urlStart:position]
+		urlValue := strings.TrimRight(rawURL, ",")
+		hadTrailingComma := len(urlValue) != len(rawURL)
+
+		descriptor := ""
+		if !hadTrailingComma {
+			for position < len(value) && isASCIIWhitespace(value[position]) {
+				position++
+			}
+			descriptorStart := position
+			parentheses := 0
+			for position < len(value) {
+				switch value[position] {
+				case '(':
+					parentheses++
+				case ')':
+					if parentheses > 0 {
+						parentheses--
+					}
+				case ',':
+					if parentheses == 0 {
+						descriptor = strings.TrimSpace(value[descriptorStart:position])
+						position++
+						goto candidateComplete
+					}
+				}
+				position++
+			}
+			descriptor = strings.TrimSpace(value[descriptorStart:position])
+		}
+
+	candidateComplete:
+		if urlValue != "" {
+			candidates = append(candidates, srcsetCandidate{url: urlValue, descriptor: descriptor})
 		}
 	}
-	return strings.Join(parts, ", ")
+	return candidates
+}
+
+func isASCIIWhitespace(value byte) bool {
+	switch value {
+	case ' ', '\t', '\n', '\f', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 func rewriteURLList(value string, base *url.URL) string {
@@ -315,38 +387,47 @@ const targetOrigin=` + string(originJSON) + `;
 const cookiePrefix=` + string(cookiePrefixJSON) + `;
 const browsePrefix="/browse/";
 const socketPrefix="/socket/";
+const virtualOriginParam="__owu_origin_v1";
 const encodeOrigin=(origin)=>{const bytes=new TextEncoder().encode(origin);let raw="";for(const byte of bytes)raw+=String.fromCharCode(byte);return btoa(raw).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");};
 const decodeOrigin=(token)=>{let raw=String(token).replace(/-/g,"+").replace(/_/g,"/");while(raw.length%4)raw+="=";const binary=atob(raw);const bytes=Uint8Array.from(binary,char=>char.charCodeAt(0));return new TextDecoder().decode(bytes);};
+const targetURL=(origin,path,search="",hash="")=>{const target=new URL(origin);target.pathname=path||"/";target.search=search;target.hash=hash;return target;};
 const passthrough=/^(?:data|blob|javascript|mailto|tel|about):/i;
-const targetFromProxyURL=(value)=>{try{const parsed=new URL(value,location.origin);if(parsed.origin!==location.origin||!parsed.pathname.startsWith(browsePrefix))return null;const remainder=parsed.pathname.slice(browsePrefix.length);const slash=remainder.indexOf("/");const token=slash<0?remainder:remainder.slice(0,slash);const path=slash<0?"/":remainder.slice(slash);const origin=decodeOrigin(token);return new URL(path+parsed.search+parsed.hash,origin);}catch{return null;}};
-const liveTargetBase=()=>targetFromProxyURL(document.baseURI)||targetFromProxyURL(location.href)||new URL(targetBase);
-const resolveTarget=(value)=>{const text=String(value);if(text.startsWith(browsePrefix)||text.startsWith(socketPrefix))return new URL(text,location.origin);const parsed=new URL(text,liveTargetBase());if(parsed.origin===location.origin){if(parsed.pathname.startsWith(browsePrefix)||parsed.pathname.startsWith(socketPrefix))return parsed;return new URL(parsed.pathname+parsed.search+parsed.hash,targetOrigin);}return parsed;};
+const targetFromProxyURL=(value)=>{try{const parsed=new URL(value,location.origin);if(parsed.origin!==location.origin||!parsed.pathname.startsWith(browsePrefix))return null;const remainder=parsed.pathname.slice(browsePrefix.length);const slash=remainder.indexOf("/");const token=slash<0?remainder:remainder.slice(0,slash);const path=slash<0?"/":remainder.slice(slash);const origin=decodeOrigin(token);return targetURL(origin,path,parsed.search,parsed.hash);}catch{return null;}};
+const socketProxyURL=(value)=>{try{const parsed=new URL(value,location.origin);if(parsed.origin!==location.origin||!parsed.pathname.startsWith(socketPrefix))return null;const remainder=parsed.pathname.slice(socketPrefix.length);const slash=remainder.indexOf("/");const token=slash<0?remainder:remainder.slice(0,slash);const origin=new URL(decodeOrigin(token));return origin.protocol==="ws:"||origin.protocol==="wss:"?parsed:null;}catch{return null;}};
+const decodeQueryPart=(value)=>decodeURIComponent(String(value).replace(/\+/g," "));
+const splitVirtualURL=(value)=>{try{const parsed=new URL(value,location.origin);if(parsed.origin!==location.origin)return null;const raw=parsed.search.startsWith("?")?parsed.search.slice(1):parsed.search;const parts=raw.split("&");for(let index=parts.length-1;index>=0;index--){const separator=parts[index].indexOf("=");if(separator<0)continue;let key,token;try{key=decodeQueryPart(parts[index].slice(0,separator));token=decodeQueryPart(parts[index].slice(separator+1));}catch{continue;}if(key!==virtualOriginParam||!token)continue;let origin;try{origin=decodeOrigin(token);const checked=new URL(origin);if(checked.protocol!=="http:"&&checked.protocol!=="https:")continue;origin=checked.origin;}catch{continue;}parts.splice(index,1);return{target:targetURL(origin,parsed.pathname,parts.length?"?"+parts.join("&"):"",parsed.hash),token};}return null;}catch{return null;}};
+const targetFromVirtualURL=(value)=>splitVirtualURL(value)?.target||null;
+const liveTargetBase=()=>targetFromProxyURL(document.baseURI)||targetFromProxyURL(location.href)||targetFromVirtualURL(location.href)||new URL(targetBase);
+const resolveTarget=(value)=>{const text=String(value);const proxyCandidate=new URL(text,location.href);const proxyTarget=targetFromProxyURL(proxyCandidate.href);if(proxyTarget)return proxyTarget;const virtualTarget=targetFromVirtualURL(proxyCandidate.href);if(virtualTarget)return virtualTarget;const socketTarget=socketProxyURL(proxyCandidate.href);if(socketTarget)return socketTarget;const parsed=new URL(text,liveTargetBase());if(parsed.origin===location.origin)return targetURL(targetOrigin,parsed.pathname,parsed.search,parsed.hash);return parsed;};
 const proxify=(value)=>{if(value==null||passthrough.test(String(value)))return value;try{const parsed=resolveTarget(value);if(parsed.origin===location.origin&&(parsed.pathname.startsWith(browsePrefix)||parsed.pathname.startsWith(socketPrefix)))return parsed.href;if(parsed.protocol!=="http:"&&parsed.protocol!=="https:")return value;return location.origin+browsePrefix+encodeOrigin(parsed.origin)+parsed.pathname+parsed.search+parsed.hash;}catch{return value;}};
+const virtualize=(value)=>{try{const parsed=resolveTarget(value);if(parsed.protocol!=="http:"&&parsed.protocol!=="https:")return value;const marker=encodeURIComponent(virtualOriginParam)+"="+encodeURIComponent(encodeOrigin(parsed.origin));return location.origin+parsed.pathname+parsed.search+(parsed.search?"&":"?")+marker+parsed.hash;}catch{return value;}};
+const initialProxyTarget=targetFromProxyURL(location.href);if(initialProxyTarget)history.replaceState(history.state,"",virtualize(initialProxyTarget.href));
 const cookieOwner=[Document.prototype,typeof HTMLDocument==="function"?HTMLDocument.prototype:null].find(prototype=>prototype&&Object.getOwnPropertyDescriptor(prototype,"cookie"));
 if(cookieOwner){const nativeCookie=Object.getOwnPropertyDescriptor(cookieOwner,"cookie");try{Object.defineProperty(cookieOwner,"cookie",{configurable:nativeCookie.configurable,enumerable:nativeCookie.enumerable,get(){const stored=nativeCookie.get.call(this);return String(stored||"").split(/;\s*/).filter(Boolean).flatMap(entry=>{const separator=entry.indexOf("=");const name=(separator<0?entry:entry.slice(0,separator)).trim();return name.startsWith(cookiePrefix)?[name.slice(cookiePrefix.length)+(separator<0?"":entry.slice(separator))]:[];}).join("; ");},set(value){const segments=String(value).split(";");const pair=(segments.shift()||"").trim();const separator=pair.indexOf("=");if(separator<=0)return;let name=pair.slice(0,separator).trim();if(!name.startsWith(cookiePrefix))name=cookiePrefix+name;const attributes=segments.map(segment=>segment.trim()).filter(Boolean).filter(segment=>{const key=segment.split("=",1)[0].trim().toLowerCase();return key!=="domain"&&key!=="path";});attributes.push("Path=/");nativeCookie.set.call(this,name+pair.slice(separator)+(attributes.length?"; "+attributes.join("; "):""));}});}catch{}}
 const nativeFetch=window.fetch;if(nativeFetch)window.fetch=function(input,init){if(input instanceof Request)return nativeFetch.call(this,new Request(proxify(input.url),input),init);return nativeFetch.call(this,proxify(input),init);};
 const xhrOpen=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url){const args=Array.from(arguments);args[1]=proxify(url);return xhrOpen.apply(this,args);};
 if(window.EventSource){const NativeEventSource=window.EventSource;window.EventSource=function(url,config){return new NativeEventSource(proxify(url),config);};window.EventSource.prototype=NativeEventSource.prototype;}
 if(window.WebSocket){const NativeWebSocket=window.WebSocket;window.WebSocket=function(value,protocols){const parsed=resolveTarget(value);const wsScheme=location.protocol==="https:"?"wss:":"ws:";const targetScheme=parsed.protocol==="wss:"||parsed.protocol==="https:"?"wss:":"ws:";const endpoint=wsScheme+"//"+location.host+socketPrefix+encodeOrigin(targetScheme+"//"+parsed.host)+parsed.pathname+parsed.search;return protocols===undefined?new NativeWebSocket(endpoint):new NativeWebSocket(endpoint,protocols);};window.WebSocket.prototype=NativeWebSocket.prototype;Object.setPrototypeOf(window.WebSocket,NativeWebSocket);}
-const nativeOpen=window.open;window.open=function(url){const args=Array.from(arguments);if(args.length)args[0]=proxify(url);return nativeOpen.apply(this,args);};
-const pushState=history.pushState;history.pushState=function(state,title,url){return pushState.call(this,state,title,url==null?url:proxify(url));};
-const replaceState=history.replaceState;history.replaceState=function(state,title,url){return replaceState.call(this,state,title,url==null?url:proxify(url));};
-if("NavigationEvent" in window&&window.navigation&&window.navigation.addEventListener){window.navigation.addEventListener("navigate",event=>{if(!event.canIntercept||event.hashChange||event.downloadRequest!==null)return;try{const rewritten=proxify(event.destination.url);if(rewritten!==event.destination.url)event.intercept({handler:()=>location.replace(rewritten)});}catch{}});}
+const nativeOpen=window.open;window.open=function(url){const args=Array.from(arguments);if(args.length&&args[0]!=null&&String(args[0])!=="")args[0]=virtualize(args[0]);return nativeOpen.apply(this,args);};
+const pushState=history.pushState;history.pushState=function(state,title,url){return pushState.call(this,state,title,url==null?url:virtualize(url));};
+const replaceState=history.replaceState;history.replaceState=function(state,title,url){return replaceState.call(this,state,title,url==null?url:virtualize(url));};
+if("NavigationEvent" in window&&window.navigation&&window.navigation.addEventListener){window.navigation.addEventListener("navigate",event=>{if(!event.canIntercept||event.hashChange||event.downloadRequest!==null)return;try{const rewritten=virtualize(event.destination.url);if(rewritten!==event.destination.url)event.intercept({handler:()=>location.replace(rewritten)});}catch{}});}
 if(navigator.sendBeacon){const nativeBeacon=navigator.sendBeacon.bind(navigator);navigator.sendBeacon=function(url,data){return nativeBeacon(proxify(url),data);};}
 if(window.Worker){const NativeWorker=window.Worker;window.Worker=function(url,options){return new NativeWorker(proxify(url),options);};window.Worker.prototype=NativeWorker.prototype;Object.setPrototypeOf(window.Worker,NativeWorker);}
 if(window.SharedWorker){const NativeSharedWorker=window.SharedWorker;window.SharedWorker=function(url,options){return new NativeSharedWorker(proxify(url),options);};window.SharedWorker.prototype=NativeSharedWorker.prototype;Object.setPrototypeOf(window.SharedWorker,NativeSharedWorker);}
 if(navigator.serviceWorker){const serviceWorkerMessage="OWU disables Service Worker registration because proxied sites share one browser origin.";const rejectServiceWorker=()=>Promise.reject(new DOMException(serviceWorkerMessage,"SecurityError"));const serviceWorkerPrototype=Object.getPrototypeOf(navigator.serviceWorker);try{Object.defineProperty(serviceWorkerPrototype,"register",{configurable:true,value:rejectServiceWorker});}catch{}try{Object.defineProperty(navigator.serviceWorker,"register",{configurable:true,value:rejectServiceWorker});}catch{try{navigator.serviceWorker.register=rejectServiceWorker;}catch{}}if(navigator.serviceWorker.getRegistrations)navigator.serviceWorker.getRegistrations().then(registrations=>Promise.all(registrations.map(registration=>registration.unregister()))).catch(()=>{});}
 const urlAttributes=new Set(["href","src","action","formaction","poster","data","cite","background","xlink:href","data-src","data-href","data-url","data-original","data-lazy-src","data-background"]);
-const proxifySrcset=(value)=>String(value).split(",").map(part=>{const fields=part.trim().split(/\s+/);if(fields[0])fields[0]=proxify(fields[0]);return fields.join(" ");}).join(", ");
+const parseSrcset=(value)=>{const input=String(value),candidates=[];const isSpace=character=>/[\t\n\f\r ]/.test(character);let position=0;while(position<input.length){while(position<input.length&&(isSpace(input[position])||input[position]===","))position++;if(position>=input.length)break;const urlStart=position;while(position<input.length&&!isSpace(input[position]))position++;const rawURL=input.slice(urlStart,position);const url=rawURL.replace(/,+$/,"");const hadTrailingComma=url.length!==rawURL.length;let descriptor="";if(!hadTrailingComma){while(position<input.length&&isSpace(input[position]))position++;const descriptorStart=position;let parentheses=0;while(position<input.length){const character=input[position];if(character==="(")parentheses++;else if(character===")"&&parentheses>0)parentheses--;else if(character===","&&parentheses===0)break;position++;}descriptor=input.slice(descriptorStart,position).trim();if(position<input.length&&input[position]===",")position++;}if(url)candidates.push({url,descriptor});}return candidates;};
+const proxifySrcset=(value)=>parseSrcset(value).map(candidate=>proxify(candidate.url)+(candidate.descriptor?" "+candidate.descriptor:"")).join(", ");
 const proxifyStyle=(value)=>String(value).replace(/url\(\s*(["']?)(.*?)\1\s*\)/gi,(match,quote,raw)=>"url("+quote+proxify(raw)+quote+")");
-const rewriteAttributeValue=(name,value)=>{const lower=String(name).toLowerCase();if(urlAttributes.has(lower))return proxify(value);if(lower==="srcset"||lower==="imagesrcset"||lower==="data-srcset")return proxifySrcset(value);if(lower==="ping")return String(value).trim().split(/\s+/).map(proxify).join(" ");if(lower==="style")return proxifyStyle(value);return value;};
-const nativeSetAttribute=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){return nativeSetAttribute.call(this,name,rewriteAttributeValue(name,value));};
+const rewriteAttributeValue=(element,name,value)=>{const lower=String(name).toLowerCase();if(lower==="href"&&(element instanceof HTMLAnchorElement||element instanceof HTMLAreaElement))return virtualize(value);if(urlAttributes.has(lower))return proxify(value);if(lower==="srcset"||lower==="imagesrcset"||lower==="data-srcset")return proxifySrcset(value);if(lower==="ping")return String(value).trim().split(/\s+/).map(proxify).join(" ");if(lower==="style")return proxifyStyle(value);return value;};
+const nativeSetAttribute=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){return nativeSetAttribute.call(this,name,rewriteAttributeValue(this,name,value));};
 const patchURLProperty=(prototype,name,transform=proxify)=>{try{const descriptor=Object.getOwnPropertyDescriptor(prototype,name);if(!descriptor||!descriptor.set||!descriptor.get)return;Object.defineProperty(prototype,name,{configurable:descriptor.configurable,enumerable:descriptor.enumerable,get:descriptor.get,set(value){descriptor.set.call(this,transform(value));}});}catch{}};
-for(const [prototype,name,transform] of [[HTMLAnchorElement.prototype,"href"],[HTMLAreaElement.prototype,"href"],[HTMLImageElement.prototype,"src"],[HTMLImageElement.prototype,"srcset",proxifySrcset],[HTMLScriptElement.prototype,"src"],[HTMLLinkElement.prototype,"href"],[HTMLFormElement.prototype,"action"],[HTMLIFrameElement.prototype,"src"],[HTMLSourceElement.prototype,"src"],[HTMLSourceElement.prototype,"srcset",proxifySrcset],[HTMLMediaElement.prototype,"src"]])patchURLProperty(prototype,name,transform);
+for(const [prototype,name,transform] of [[HTMLAnchorElement.prototype,"href",virtualize],[HTMLAreaElement.prototype,"href",virtualize],[HTMLImageElement.prototype,"src"],[HTMLImageElement.prototype,"srcset",proxifySrcset],[HTMLScriptElement.prototype,"src"],[HTMLLinkElement.prototype,"href"],[HTMLFormElement.prototype,"action"],[HTMLIFrameElement.prototype,"src"],[HTMLSourceElement.prototype,"src"],[HTMLSourceElement.prototype,"srcset",proxifySrcset],[HTMLMediaElement.prototype,"src"]])patchURLProperty(prototype,name,transform);
 if(window.CSSStyleSheet&&CSSStyleSheet.prototype.insertRule){const nativeInsertRule=CSSStyleSheet.prototype.insertRule;CSSStyleSheet.prototype.insertRule=function(rule,index){return nativeInsertRule.call(this,proxifyStyle(rule),index);};}
-const rewriteElement=(element)=>{if(!(element instanceof Element))return;for(const attribute of Array.from(element.attributes||[])){const rewritten=rewriteAttributeValue(attribute.name,attribute.value);if(rewritten!==attribute.value)nativeSetAttribute.call(element,attribute.name,rewritten);}};
+const rewriteElement=(element)=>{if(!(element instanceof Element))return;for(const attribute of Array.from(element.attributes||[])){const rewritten=rewriteAttributeValue(element,attribute.name,attribute.value);if(rewritten!==attribute.value)nativeSetAttribute.call(element,attribute.name,rewritten);}};
 const rewriteTree=(node)=>{rewriteElement(node);if(node&&node.querySelectorAll)for(const child of node.querySelectorAll("[href],[src],[action],[formaction],[poster],[data],[cite],[background],[xlink\\:href],[srcset],[imagesrcset],[data-src],[data-href],[data-url],[data-original],[data-lazy-src],[data-background],[data-srcset],[ping],[style]"))rewriteElement(child);};
-document.addEventListener("click",event=>{const anchor=event.target&&event.target.closest?event.target.closest("a[href]"):null;if(anchor)nativeSetAttribute.call(anchor,"href",proxify(anchor.getAttribute("href")));},true);
+document.addEventListener("click",event=>{const anchor=event.target&&event.target.closest?event.target.closest("a[href]"):null;if(anchor)nativeSetAttribute.call(anchor,"href",virtualize(anchor.getAttribute("href")));},true);
 document.addEventListener("submit",event=>{const form=event.target;if(form instanceof HTMLFormElement&&form.hasAttribute("action"))nativeSetAttribute.call(form,"action",proxify(form.getAttribute("action")));},true);
 const observer=new MutationObserver(records=>{for(const record of records){if(record.type==="attributes")rewriteElement(record.target);for(const node of record.addedNodes)rewriteTree(node);}});observer.observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:["href","src","action","formaction","poster","data","cite","background","xlink:href","srcset","imagesrcset","data-src","data-href","data-url","data-original","data-lazy-src","data-background","data-srcset","ping","style"]});
 rewriteTree(document.documentElement);

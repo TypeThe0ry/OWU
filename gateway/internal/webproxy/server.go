@@ -29,6 +29,7 @@ const (
 	browsePrefix        = "/browse/"
 	socketPrefix        = "/socket/"
 	tunnelPrefix        = "/tunnel/"
+	virtualOriginParam  = "__owu_origin_v1"
 	maxRequestBodyBytes = 64 << 20
 	maxRewriteBodyBytes = 16 << 20
 )
@@ -79,7 +80,14 @@ func safePolicy(demoOrigin string) safety.Policy {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	virtualTarget, virtualToken, virtual := parseVirtualTarget(r.URL)
 	switch {
+	case virtual:
+		if r.Method == http.MethodConnect || r.Method == http.MethodTrace {
+			writeError(w, http.StatusMethodNotAllowed, "This request method is not supported.")
+			return
+		}
+		s.proxyHTTP(w, r, virtualTarget, virtualToken)
 	case r.URL.Path == "/healthz":
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	case strings.HasPrefix(r.URL.Path, browsePrefix):
@@ -107,13 +115,8 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRefererFallback(w http.ResponseWriter, r *http.Request) {
-	referer, err := url.Parse(r.Referer())
-	if err != nil || !strings.HasPrefix(referer.Path, browsePrefix) {
-		writeError(w, http.StatusNotFound, "Not found.")
-		return
-	}
-	base, _, err := parseProxyTarget(referer, browsePrefix, map[string]bool{"http": true, "https": true})
-	if err != nil {
+	base, ok := proxiedRefererTarget(r.Referer())
+	if !ok {
 		writeError(w, http.StatusNotFound, "Not found.")
 		return
 	}
@@ -140,11 +143,21 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, target *url.U
 	cancel()
 	ctx := r.Context()
 
-	body := http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	body, err := outboundRequestBody(w, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "The request body could not be read.")
+		return
+	}
 	outbound, err := http.NewRequestWithContext(ctx, r.Method, target.String(), body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "The upstream request could not be created.")
 		return
+	}
+	if body != nil {
+		// MaxBytesReader intentionally hides the underlying size. Preserve a known
+		// inbound length so fixed-length POST/PUT/PATCH bodies do not become
+		// chunked while retaining chunked semantics when ContentLength is unknown.
+		outbound.ContentLength = r.ContentLength
 	}
 	copyRequestHeaders(outbound.Header, r.Header)
 	outbound.Host = target.Host
@@ -169,6 +182,30 @@ func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, target *url.U
 	if err := writeProxyResponse(w, r, response, target, token); err != nil {
 		writeError(w, http.StatusBadGateway, "The destination response could not be processed.")
 	}
+}
+
+func outboundRequestBody(w http.ResponseWriter, r *http.Request) (io.Reader, error) {
+	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
+		return nil, nil
+	}
+
+	body := http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	if r.ContentLength >= 0 || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		return body, nil
+	}
+
+	// Unknown-length GET and HEAD requests need one byte of lookahead. Forward a
+	// real chunked body without data loss, but turn an empty chunked body into a
+	// nil reader so Go does not emit request-body framing. Poki's edge renderer,
+	// among others, rejects an otherwise ordinary GET carrying empty framing.
+	var first [1]byte
+	if _, err := io.ReadFull(body, first[:]); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return io.MultiReader(bytes.NewReader(first[:]), body), nil
 }
 
 func (s *Server) handleSocket(w http.ResponseWriter, r *http.Request) {
@@ -387,11 +424,46 @@ func rewriteRequestOrigin(outbound, incoming *http.Request) {
 
 func proxiedRefererTarget(value string) (*url.URL, bool) {
 	referer, err := url.Parse(value)
-	if err != nil || !strings.HasPrefix(referer.Path, browsePrefix) {
+	if err != nil {
 		return nil, false
 	}
-	target, _, err := parseProxyTarget(referer, browsePrefix, map[string]bool{"http": true, "https": true})
-	return target, err == nil
+	if strings.HasPrefix(referer.Path, browsePrefix) {
+		target, _, err := parseProxyTarget(referer, browsePrefix, map[string]bool{"http": true, "https": true})
+		return target, err == nil
+	}
+	target, _, ok := parseVirtualTarget(referer)
+	return target, ok
+}
+
+func parseVirtualTarget(requestURL *url.URL) (*url.URL, string, bool) {
+	parts := strings.Split(requestURL.RawQuery, "&")
+	for index := len(parts) - 1; index >= 0; index-- {
+		rawKey, rawValue, found := strings.Cut(parts[index], "=")
+		if !found {
+			continue
+		}
+		key, err := url.QueryUnescape(rawKey)
+		if err != nil || key != virtualOriginParam {
+			continue
+		}
+		token, err := url.QueryUnescape(rawValue)
+		if err != nil {
+			continue
+		}
+		target, err := decodeOrigin(token, map[string]bool{"http": true, "https": true})
+		if err != nil {
+			continue
+		}
+		remaining := make([]string, 0, len(parts)-1)
+		remaining = append(remaining, parts[:index]...)
+		remaining = append(remaining, parts[index+1:]...)
+		target.Path = requestURL.Path
+		target.RawPath = requestURL.RawPath
+		target.RawQuery = strings.Join(remaining, "&")
+		target.Fragment = requestURL.Fragment
+		return target, token, true
+	}
+	return nil, "", false
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
