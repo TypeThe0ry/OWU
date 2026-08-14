@@ -17,10 +17,19 @@ interface StatsData {
   visitorsToday?: number;
   usesTotal?: number;
   usesToday?: number;
+  trafficTotal?: number;
+  trafficToday?: number;
   topSites?: TopSite[];
 }
 
 const numberFormat = new Intl.NumberFormat("en-US");
+
+function formatBytes(value: number): string {
+  if (value >= 1 << 30) return (value / (1 << 30)).toFixed(2) + " GB";
+  if (value >= 1 << 20) return (value / (1 << 20)).toFixed(1) + " MB";
+  if (value >= 1 << 10) return (value / (1 << 10)).toFixed(0) + " KB";
+  return value + " B";
+}
 
 function formatTime(value?: string): string {
   if (!value) return "–";
@@ -100,12 +109,17 @@ export default function StatsPage() {
                 <section className="stat-card">
                   <div className="stat-label">Visitors</div>
                   <div className="stat-value">{numberFormat.format(data?.visitorsTotal ?? 0)}</div>
-                  <div className="stat-sub">{numberFormat.format(data?.visitorsToday ?? 0)} today · anonymous total</div>
+                  <div className="stat-sub">{numberFormat.format(data?.visitorsToday ?? 0)} today</div>
                 </section>
                 <section className="stat-card">
                   <div className="stat-label">Uses</div>
                   <div className="stat-value">{numberFormat.format(data?.usesTotal ?? 0)}</div>
                   <div className="stat-sub">{numberFormat.format(data?.usesToday ?? 0)} today</div>
+                </section>
+                <section className="stat-card">
+                  <div className="stat-label">Traffic</div>
+                  <div className="stat-value">{formatBytes(data?.trafficTotal ?? 0)}</div>
+                  <div className="stat-sub">{formatBytes(data?.trafficToday ?? 0)} today</div>
                 </section>
                 <section className="stat-card">
                   <div className="stat-label">Counting since</div>
@@ -114,7 +128,7 @@ export default function StatsPage() {
                 </section>
               </div>
 
-              <h2 className="stats-section-title">Most visited websites</h2>
+              <h2 className="stats-section-title">Most visited websites · Top 10</h2>
               {topSites.length === 0 ? (
                 <p className="stats-empty">No data yet</p>
               ) : (
@@ -132,7 +146,7 @@ export default function StatsPage() {
           )}
 
           <p className="stats-note">
-            Statistics are anonymous: visitors are identified only by an irreversible hash and no IP or other identifying
+            Anonymous statistics: visitors are identified only by an irreversible hash and no IP or other identifying
             data is stored; destination websites are recorded by domain and usage count only.
           </p>
         </div>

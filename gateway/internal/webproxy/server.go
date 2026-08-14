@@ -154,6 +154,39 @@ func safePolicy(demoOrigin string) safety.Policy {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.stats == nil {
+		s.serveHTTP(w, r)
+		return
+	}
+	counter := &countingResponseWriter{ResponseWriter: w}
+	s.serveHTTP(counter, r)
+	traffic := counter.bytes
+	if r.ContentLength > 0 {
+		traffic += uint64(r.ContentLength)
+	}
+	s.recordTraffic(traffic)
+}
+
+// countingResponseWriter counts response bytes written to the client so the
+// anonymous traffic metric covers proxied pages, media, sockets, and API calls.
+type countingResponseWriter struct {
+	http.ResponseWriter
+	bytes uint64
+}
+
+func (c *countingResponseWriter) Write(payload []byte) (int, error) {
+	written, err := c.ResponseWriter.Write(payload)
+	c.bytes += uint64(written)
+	return written, err
+}
+
+// Unwrap lets http.ResponseController (SSE flushing, WebSocket hijacking) reach
+// the underlying writer.
+func (c *countingResponseWriter) Unwrap() http.ResponseWriter {
+	return c.ResponseWriter
+}
+
+func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	virtualTarget, virtualToken, virtual := parseVirtualTarget(r.URL)
@@ -614,6 +647,12 @@ func (s *Server) recordUse(r *http.Request, site, path string) {
 	s.stats.Record(s.stats.VisitorID(r.RemoteAddr), stats.NormalizeSite(site), !hasMediaExtension(path))
 }
 
+func (s *Server) recordTraffic(bytes uint64) {
+	if s.stats != nil {
+		s.stats.AddTraffic(bytes)
+	}
+}
+
 func (s *Server) handleStatsAPI(w http.ResponseWriter, r *http.Request) {
 	if s.stats == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "message": "Usage statistics are not configured."})
@@ -634,8 +673,8 @@ func (s *Server) handleStatsAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		return top[i].Site < top[j].Site
 	})
-	if len(top) > 20 {
-		top = top[:20]
+	if len(top) > 10 {
+		top = top[:10]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":       true,
@@ -645,6 +684,8 @@ func (s *Server) handleStatsAPI(w http.ResponseWriter, r *http.Request) {
 		"visitorsToday": s.stats.VisitorsToday(snapshot),
 		"usesTotal":     snapshot.UsesTotal,
 		"usesToday":     snapshot.UsesToday,
+		"trafficTotal":  snapshot.TrafficTotal,
+		"trafficToday":  snapshot.TrafficToday,
 		"topSites":      top,
 	})
 }
@@ -698,6 +739,7 @@ const statsPageHTML = `<!doctype html>
   <div class="grid">
     <section class="metric"><div class="label">Visitors (total)</div><div class="value" id="visitorsTotal">&ndash;</div><div class="sub" id="visitorsToday">&ndash; today</div></section>
     <section class="metric"><div class="label">Uses (total)</div><div class="value" id="usesTotal">&ndash;</div><div class="sub" id="usesToday">&ndash; today</div></section>
+    <section class="metric"><div class="label">Traffic (total)</div><div class="value" id="trafficTotal">&ndash;</div><div class="sub" id="trafficToday">&ndash; today</div></section>
     <section class="metric"><div class="label">Counting since</div><div class="value" id="since" style="font-size:20px;margin-top:14px">&ndash;</div><div class="sub">Anonymous</div></section>
   </div>
   <h2>Most visited websites</h2>
@@ -711,6 +753,12 @@ const statsPageHTML = `<!doctype html>
 <script>
 const fmt = new Intl.NumberFormat("en-US");
 const byId = (id) => document.getElementById(id);
+function formatBytes(value) {
+  if (value >= 1073741824) return (value / 1073741824).toFixed(2) + " GB";
+  if (value >= 1048576) return (value / 1048576).toFixed(1) + " MB";
+  if (value >= 1024) return (value / 1024).toFixed(0) + " KB";
+  return value + " B";
+}
 function fmtTime(value) {
   if (!value) return "&ndash;";
   const date = new Date(value);
@@ -725,6 +773,8 @@ async function refresh() {
     byId("visitorsToday").textContent = fmt.format(data.visitorsToday || 0) + " today";
     byId("usesTotal").textContent = fmt.format(data.usesTotal || 0);
     byId("usesToday").textContent = fmt.format(data.usesToday || 0) + " today";
+    byId("trafficTotal").textContent = formatBytes(data.trafficTotal || 0);
+    byId("trafficToday").textContent = formatBytes(data.trafficToday || 0) + " today";
     byId("since").textContent = fmtTime(data.since);
     byId("updated").textContent = "Updated at " + fmtTime(data.updatedAt);
     const list = byId("sites");

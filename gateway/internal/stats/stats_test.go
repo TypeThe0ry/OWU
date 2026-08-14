@@ -30,6 +30,9 @@ func TestRecorderPersistenceAndTotals(t *testing.T) {
 	recorder.Record(visitorA, "example.com", false) // subresource: no use, visitor stays
 	recorder.Record(visitorA, "www.example.org", true)
 	recorder.Record(visitorB, "example.com", true)
+	recorder.AddTraffic(1024)
+	recorder.AddTraffic(0) // ignored
+	recorder.AddTraffic(512)
 
 	recorder.mu.Lock()
 	recorder.dirty = true
@@ -50,6 +53,12 @@ func TestRecorderPersistenceAndTotals(t *testing.T) {
 	}
 	if snapshot.UsesToday != 3 {
 		t.Fatalf("UsesToday = %d, want 3", snapshot.UsesToday)
+	}
+	if snapshot.TrafficTotal != 1536 {
+		t.Fatalf("TrafficTotal = %d, want 1536", snapshot.TrafficTotal)
+	}
+	if snapshot.TrafficToday != 1536 {
+		t.Fatalf("TrafficToday = %d, want 1536", snapshot.TrafficToday)
 	}
 	if got := len(snapshot.Visitors); got != 2 {
 		t.Fatalf("unique visitors = %d, want 2", got)
@@ -78,6 +87,7 @@ func TestRecorderDayRollover(t *testing.T) {
 
 	visitor := recorder.VisitorID("203.0.113.7:53000")
 	recorder.Record(visitor, "example.com", true)
+	recorder.AddTraffic(1000)
 
 	// Simulate a new local day.
 	recorder.mu.Lock()
@@ -85,12 +95,19 @@ func TestRecorderDayRollover(t *testing.T) {
 	recorder.mu.Unlock()
 
 	recorder.Record(visitor, "example.net", true)
+	recorder.AddTraffic(200)
 	snapshot := recorder.Snapshot()
 	if snapshot.UsesToday != 1 {
 		t.Fatalf("UsesToday after rollover = %d, want 1", snapshot.UsesToday)
 	}
 	if snapshot.UsesTotal != 2 {
 		t.Fatalf("UsesTotal = %d, want 2", snapshot.UsesTotal)
+	}
+	if snapshot.TrafficToday != 200 {
+		t.Fatalf("TrafficToday after rollover = %d, want 200", snapshot.TrafficToday)
+	}
+	if snapshot.TrafficTotal != 1200 {
+		t.Fatalf("TrafficTotal = %d, want 1200", snapshot.TrafficTotal)
 	}
 	if got := recorder.VisitorsToday(snapshot); got != 1 {
 		t.Fatalf("VisitorsToday = %d, want 1", got)

@@ -23,13 +23,15 @@ import (
 
 // Data is the persisted snapshot. Maps are keyed by opaque identifiers only.
 type Data struct {
-	Since     time.Time         `json:"since"`
-	UpdatedAt time.Time         `json:"updatedAt"`
-	UsesTotal int64             `json:"usesTotal"`
-	UsesToday int64             `json:"usesToday"`
-	Day       string            `json:"day"`      // local date (2006-01-02) UsesToday belongs to
-	Visitors  map[string]string `json:"visitors"` // salted visitor hash -> last active local date
-	Sites     map[string]int64  `json:"sites"`    // website hostname -> use count
+	Since        time.Time         `json:"since"`
+	UpdatedAt    time.Time         `json:"updatedAt"`
+	UsesTotal    int64             `json:"usesTotal"`
+	UsesToday    int64             `json:"usesToday"`
+	TrafficTotal uint64            `json:"trafficTotal"` // response + request bytes
+	TrafficToday uint64            `json:"trafficToday"`
+	Day          string            `json:"day"`      // local date (2006-01-02) UsesToday belongs to
+	Visitors     map[string]string `json:"visitors"` // salted visitor hash -> last active local date
+	Sites        map[string]int64  `json:"sites"`    // website hostname -> use count
 }
 
 // Recorder serializes statistic updates and periodically persists them.
@@ -204,10 +206,7 @@ func (r *Recorder) Record(visitorID, site string, countUse bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.data.Visitors[visitorID] = day
-	if r.data.Day != day {
-		r.data.Day = day
-		r.data.UsesToday = 0
-	}
+	r.rollDayLocked(day)
 	if countUse {
 		r.data.UsesTotal++
 		r.data.UsesToday++
@@ -216,6 +215,29 @@ func (r *Recorder) Record(visitorID, site string, countUse bool) {
 		}
 	}
 	r.dirty = true
+}
+
+// AddTraffic records transferred bytes (responses written to clients plus
+// request bodies received). The daily traffic counter rolls over at the same
+// local-day boundary as the usage counters.
+func (r *Recorder) AddTraffic(bytes uint64) {
+	if bytes == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rollDayLocked(todayKey())
+	r.data.TrafficTotal += bytes
+	r.data.TrafficToday += bytes
+	r.dirty = true
+}
+
+func (r *Recorder) rollDayLocked(day string) {
+	if r.data.Day != day {
+		r.data.Day = day
+		r.data.UsesToday = 0
+		r.data.TrafficToday = 0
+	}
 }
 
 // Snapshot returns a copy of the current statistics.

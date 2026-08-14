@@ -363,6 +363,24 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
 .stats-link i { color: var(--accent); font-style: normal; }
 .stats-link-back i { color: var(--success); }
 
+.github-link {
+  align-items: center;
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  color: var(--text);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 7px;
+  padding: 11px 16px;
+  transition: background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+.github-link:hover { background: var(--glass-strong); box-shadow: 0 8px 22px rgba(45, 58, 91, 0.16); transform: translateY(-1px); }
+.github-link svg { color: var(--muted); }
+
 .popular-sites { margin: 16px auto 0; max-width: 860px; text-align: center; }
 .popular-label { color: var(--faint); display: block; font-size: 10px; font-weight: 800; letter-spacing: 0.16em; margin-bottom: 8px; text-transform: uppercase; }
 .popular-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
@@ -381,35 +399,48 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
 .popular-host { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .popular-count { color: var(--accent); font-size: 11px; font-variant-numeric: tabular-nums; font-weight: 800; }
 
-.stats-shell { overflow-y: auto; }
-.stats-stage { align-self: center; margin: 4vh auto; max-width: 880px; width: 100%; }
+.stats-shell { overflow: hidden; }
+.stats-stage { align-self: center; margin: 2vh auto; max-width: 880px; width: 100%; }
 .stats-card {
   backdrop-filter: blur(34px) saturate(170%);
   -webkit-backdrop-filter: blur(34px) saturate(170%);
   background: linear-gradient(135deg, var(--glass-strong), var(--glass));
   border: 1px solid var(--glass-border);
-  border-radius: 28px;
+  border-radius: 22px;
   box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, 0.45);
-  padding: clamp(20px, 3vw, 34px);
+  padding: clamp(14px, 2vw, 24px);
   width: 100%;
 }
-.stats-head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 18px; }
-.stats-head h1 { font-size: clamp(22px, 3vw, 30px); letter-spacing: -0.04em; margin: 0; }
-.stats-updated { color: var(--faint); font-size: 12px; }
-.stats-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
-.stat-card { background: var(--input); border: 1px solid var(--glass-line); border-radius: 18px; padding: 18px; }
-.stat-label { color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
-.stat-value { font-size: clamp(26px, 4vw, 34px); font-variant-numeric: tabular-nums; font-weight: 750; margin-top: 8px; }
-.stat-value-date { font-size: clamp(15px, 2.4vw, 19px); line-height: 1.4; }
-.stat-sub { color: var(--faint); font-size: 12px; margin-top: 4px; }
-.stats-section-title { color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: 0.08em; margin: 24px 0 12px; text-transform: uppercase; }
-.stats-sites { list-style: none; margin: 0; padding: 0; }
-.stats-sites li { align-items: center; background: var(--input); border: 1px solid var(--glass-line); border-radius: 14px; display: flex; gap: 12px; margin-bottom: 8px; padding: 11px 14px; }
-.stats-rank { align-items: center; background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 9px; color: var(--accent); display: inline-flex; flex: none; font-size: 13px; font-weight: 800; height: 26px; justify-content: center; width: 26px; }
-.stats-site { flex: 1; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stats-count { color: var(--faint); font-size: 13px; font-variant-numeric: tabular-nums; }
-.stats-empty { color: var(--faint); font-size: 14px; padding: 14px 2px; }
-.stats-note { color: var(--faint); font-size: 11px; line-height: 1.8; margin: 20px 0 0; }
+.stats-head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 10px; }
+.stats-head h1 { font-size: clamp(18px, 2.4vw, 26px); letter-spacing: -0.04em; margin: 0; }
+.stats-updated { color: var(--faint); font-size: 11px; }
+.stats-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.stat-card { background: var(--input); border: 1px solid var(--glass-line); border-radius: 14px; padding: 11px 13px; }
+.stat-label { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.stat-value { font-size: clamp(20px, 3vw, 28px); font-variant-numeric: tabular-nums; font-weight: 750; margin-top: 4px; }
+.stat-value-date { font-size: clamp(13px, 2vw, 16px); line-height: 1.4; }
+.stat-sub { color: var(--faint); font-size: 11px; margin-top: 2px; }
+.stats-section-title { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: 0.08em; margin: 12px 0 8px; text-transform: uppercase; }
+.stats-sites { list-style: none; margin: 0; max-height: 36vh; overflow-y: auto; padding: 0 2px 0 0; }
+.stats-sites li { align-items: center; background: var(--input); border: 1px solid var(--glass-line); border-radius: 12px; display: flex; gap: 10px; margin-bottom: 5px; padding: 7px 11px; }
+.stats-rank { align-items: center; background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 7px; color: var(--accent); display: inline-flex; flex: none; font-size: 12px; font-weight: 800; height: 22px; justify-content: center; width: 22px; }
+.stats-site { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stats-count { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.stats-empty { color: var(--faint); font-size: 13px; padding: 8px 2px; }
+.stats-note { color: var(--faint); font-size: 10px; line-height: 1.6; margin: 10px 0 0; }
+
+@media (max-height: 720px) {
+  .stats-note { display: none; }
+  .stats-sites { max-height: 26vh; }
+}
+
+@media (max-width: 680px) {
+  .stats-grid { gap: 8px; grid-template-columns: repeat(2, 1fr); }
+  .stats-card { padding: 12px; }
+  .stats-head h1 { font-size: 18px; }
+  .stats-updated { font-size: 10px; }
+  .stats-sites { max-height: 28vh; }
+}
 
 /* ---- keep the home page in one viewport ---- */
 @media (max-height: 800px) and (min-width: 681px) {
@@ -440,7 +471,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
 }
 
 @media (max-width: 680px) {
-  .stats-link { font-size: 11px; padding: 8px 12px; }
+  .stats-link, .github-link { font-size: 11px; padding: 8px 12px; }
 }
 
 @media (max-height: 600px) {
