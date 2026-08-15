@@ -27,6 +27,7 @@ import (
 	"permit-gateway/internal/stats"
 
 	"golang.org/x/net/html/charset"
+	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -586,9 +587,31 @@ func copyRequestHeaders(destination, source http.Header) {
 	}
 }
 
+// cookiePrefix derives the browser-side cookie namespace from the target's
+// registrable domain (e.g. www.tiktok.com and v16-webapp-prime.tiktok.com both
+// map to tiktok.com). This mirrors native browser cookie behavior: cookies
+// follow the target across its subdomains, which media sites like TikTok rely
+// on for playback, while still isolating cookies between unrelated domains.
 func cookiePrefix(token string) string {
-	sum := sha256.Sum256([]byte(token))
+	sum := sha256.Sum256([]byte("owu-domain|" + cookieDomainForToken(token)))
 	return "owu_" + hex.EncodeToString(sum[:6]) + "_"
+}
+
+func cookieDomainForToken(token string) string {
+	decoded, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return token
+	}
+	origin, err := url.Parse(string(decoded))
+	if err != nil || origin.Host == "" {
+		return token
+	}
+	host := strings.ToLower(origin.Hostname())
+	domain, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil {
+		return host
+	}
+	return domain
 }
 
 func setTargetCookies(outbound, incoming *http.Request, token string) {

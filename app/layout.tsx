@@ -12,14 +12,32 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_OWU_BASE_URL ?? "https://owu.terracat.net";
+
 export const metadata: Metadata = {
-  metadataBase: new URL(
-    process.env.NEXT_PUBLIC_OWU_BASE_URL ?? "https://owu.example.com",
-  ),
+  metadataBase: new URL(siteUrl),
   applicationName: "OWU",
-  title: "OWU — Open Website Unblocker",
+  title: {
+    default: "OWU — Open Website Unblocker",
+    template: "%s · OWU",
+  },
   description:
-    "A browser-password protected personal web proxy.",
+    "OWU is a self-hosted personal web proxy. Open any HTTP or HTTPS website through your own server while the address bar stays on OWU — built by Team TerraCat.",
+  keywords: [
+    "web proxy",
+    "unblocker",
+    "personal proxy",
+    "open website",
+    "OWU",
+    "Open Website Unblocker",
+    "Team TerraCat",
+    "browser proxy",
+  ],
+  authors: [{ name: "Team TerraCat", url: "https://github.com/TypeThe0ry" }],
+  creator: "Team TerraCat",
+  publisher: "Team TerraCat",
+  robots: { index: true, follow: true, "max-image-preview": "large" },
+  alternates: { canonical: "/" },
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
@@ -37,7 +55,12 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "OWU — Open Website Unblocker",
-    description: "Your private browser-based web proxy.",
+    description:
+      "Your private browser-based web proxy. Open any website through your server — built by Team TerraCat.",
+    url: siteUrl,
+    siteName: "OWU",
+    locale: "en_US",
+    type: "website",
     images: ["/og.png"],
   },
   twitter: {
@@ -56,7 +79,26 @@ export const viewport: Viewport = {
   ],
 };
 
-const themeInitScript = `try{const saved=localStorage.getItem("owu-theme");const theme=saved==="light"||saved==="dark"?saved:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=theme}catch{}`;
+const websiteLd = {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "@id": siteUrl + "/#website",
+  url: siteUrl + "/",
+  name: "OWU — Open Website Unblocker",
+  alternateName: "OWU",
+  description:
+    "OWU is a self-hosted personal web proxy that opens any HTTP or HTTPS website through your own server.",
+  inLanguage: "en",
+  applicationCategory: "WebApplication",
+  operatingSystem: "Any",
+  publisher: {
+    "@type": "Organization",
+    name: "Team TerraCat",
+    url: "https://github.com/TypeThe0ry",
+  },
+};
+
+const themeInitScript = "try{const saved=localStorage.getItem("owu-theme");const theme=saved==="light"||saved==="dark"?saved:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=theme}catch{}";
 
 export default function RootLayout({
   children,
@@ -67,9 +109,13 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteLd) }}
+        />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={"".concat(geistSans.variable, " ", geistMono.variable, " antialiased")}
       >
         {children}
       </body>
