@@ -149,7 +149,7 @@ export default function StatsPage() {
 
       <footer>
         <span>OWU</span>
-        <span>Simple by design.</span>
+        <span>Made By Team TerraCat</span>
       </footer>
     </main>
   );
