@@ -884,6 +884,16 @@ func writeProxyResponse(w http.ResponseWriter, incoming *http.Request, response 
 func writeProxyResponseWithCache(w http.ResponseWriter, incoming *http.Request, response *http.Response, target *url.URL, token string, cacheMaxAge time.Duration) error {
 	contentType := strings.ToLower(response.Header.Get("Content-Type"))
 	partialResponse := response.StatusCode == http.StatusPartialContent || response.Header.Get("Content-Range") != ""
+	if response.StatusCode >= 300 && response.StatusCode < 400 {
+		// Redirects carry no meaningful body. Some origins (Instagram when
+		// rate-limiting, for example) close the connection immediately after
+		// the 3xx, so reading the body for rewriting would turn a redirect
+		// into a 502. Forward the headers and status as-is.
+		copyResponseHeaders(w.Header(), response.Header)
+		rewriteResponseHeaders(w.Header(), response, target, token, incoming.Header.Get("X-Forwarded-Proto") == "https", mediaCacheDecision{})
+		w.WriteHeader(response.StatusCode)
+		return nil
+	}
 	rewriteHTMLBody := !partialResponse && (strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml"))
 	rewriteCSSBody := !partialResponse && strings.Contains(contentType, "text/css")
 	rewriteHLSBody := !partialResponse && !rewriteHTMLBody && isHLSManifestContent(contentType, target.Path)
@@ -950,7 +960,10 @@ func writeProxyResponseWithCache(w http.ResponseWriter, incoming *http.Request, 
 
 	setStreamingContentLength(w.Header(), response)
 	w.WriteHeader(response.StatusCode)
-	return copyProxyBody(w, response.Body, partialResponse || strings.HasPrefix(contentType, "text/event-stream"))
+	// The response is committed; a broken upstream stream must not turn it
+	// into a 502 after the client already received headers and a status.
+	_ = copyProxyBody(w, response.Body, partialResponse || strings.HasPrefix(contentType, "text/event-stream"))
+	return nil
 }
 
 var proxyCopyBufferPool = sync.Pool{New: func() any {
