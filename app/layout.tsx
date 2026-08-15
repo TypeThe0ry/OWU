@@ -36,7 +36,7 @@ export const metadata: Metadata = {
   authors: [{ name: "Team TerraCat", url: "https://github.com/TypeThe0ry" }],
   creator: "Team TerraCat",
   publisher: "Team TerraCat",
-  robots: { index: true, follow: true, "max-image-preview": "large" },
+  robots: { index: true, follow: true, maxImagePreview: "large" },
   alternates: { canonical: "/" },
   manifest: "/manifest.webmanifest",
   icons: {
@@ -98,7 +98,7 @@ const websiteLd = {
   },
 };
 
-const themeInitScript = "try{const saved=localStorage.getItem("owu-theme");const theme=saved==="light"||saved==="dark"?saved:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=theme}catch{}";
+const themeInitScript = "try{const saved=localStorage.getItem('owu-theme');const theme=saved==='light'||saved==='dark'?saved:(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=theme}catch{}";
 
 export default function RootLayout({
   children,
