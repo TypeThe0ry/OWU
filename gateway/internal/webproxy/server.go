@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -26,9 +26,32 @@ import (
 	"permit-gateway/internal/safety"
 	"permit-gateway/internal/stats"
 
+	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/html/charset"
 	"golang.org/x/net/publicsuffix"
 )
+
+// systemRoots is the host CA pool used to verify upstream certificates.
+var systemRoots, _ = x509.SystemCertPool()
+
+// buildChromeHTTP1Spec returns the Chrome client-hello fingerprint with ALPN
+// pinned to http/1.1. Go's http.Transport speaks HTTP/1.1 when DialTLSContext
+// returns a non-*tls.Conn connection, so forcing http/1.1 keeps the browser
+// fingerprint while matching what the transport actually sends. A fresh spec
+// is built per connection: utls warns that a shared ClientHelloSpec carries
+// mutable state across handshakes.
+func buildChromeHTTP1Spec() utls.ClientHelloSpec {
+	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_Auto)
+	if err != nil {
+		return utls.ClientHelloSpec{}
+	}
+	for i := range spec.Extensions {
+		if alpn, ok := spec.Extensions[i].(*utls.ALPNExtension); ok {
+			alpn.AlpnProtocols = []string{"http/1.1"}
+		}
+	}
+	return spec
+}
 
 const (
 	browsePrefix             = "/browse/"
@@ -425,29 +448,63 @@ func (s *Server) transportFor(target *url.URL) *http.Transport {
 }
 
 func (s *Server) newTransport(target *url.URL) *http.Transport {
-	host, port := target.Hostname(), targetPort(target)
 	return &http.Transport{
 		Proxy:                 nil,
-		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          8,
 		MaxIdleConnsPerHost:   8,
 		IdleConnTimeout:       60 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
 		ExpectContinueTimeout: time.Second,
-		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host},
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			if s.isDemoTarget(target) {
-				requestedHost, requestedPort, err := net.SplitHostPort(address)
-				if err != nil || !strings.EqualFold(strings.TrimSuffix(requestedHost, "."), host) || requestedPort != strconv.Itoa(port) {
-					return nil, errors.New("upstream dial target did not match the test destination")
-				}
-				dialer := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-				return dialer.DialContext(ctx, network, address)
+			return s.dialTarget(ctx, network, address, target)
+		},
+		DialTLSContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			rawConn, err := s.dialTarget(ctx, network, address, target)
+			if err != nil {
+				return nil, err
 			}
-			return s.safety.DialContext(ctx, network, address, target.Scheme, host, port)
+			// Present a browser TLS fingerprint (Chrome) instead of Go's
+			// ClientHello so anti-bot origins (Douyin, TikTok, Instagram, ...)
+			// stop rejecting requests. HTTP/1.1 is negotiated deliberately:
+			// Go's transport uses HTTP/1.1 when DialTLSContext returns a
+			// non-*tls.Conn connection.
+			serverName := target.Hostname()
+			if requested, _, splitErr := net.SplitHostPort(address); splitErr == nil {
+				serverName = requested
+			}
+			spec := buildChromeHTTP1Spec()
+			uconn := utls.UClient(rawConn, &utls.Config{
+				ServerName: serverName,
+				NextProtos: []string{"http/1.1"},
+				RootCAs:    systemRoots,
+			}, utls.HelloCustom)
+			if err := uconn.ApplyPreset(&spec); err != nil {
+				_ = rawConn.Close()
+				return nil, err
+			}
+			if err := uconn.HandshakeContext(ctx); err != nil {
+				_ = rawConn.Close()
+				return nil, err
+			}
+			return uconn, nil
 		},
 	}
+}
+
+// dialTarget dials a proxied destination through the safety layer (SSRF
+// protection and DNS pinning), or directly for the configured demo target.
+func (s *Server) dialTarget(ctx context.Context, network, address string, target *url.URL) (net.Conn, error) {
+	host, port := target.Hostname(), targetPort(target)
+	if s.isDemoTarget(target) {
+		requestedHost, requestedPort, err := net.SplitHostPort(address)
+		if err != nil || !strings.EqualFold(strings.TrimSuffix(requestedHost, "."), host) || requestedPort != strconv.Itoa(port) {
+			return nil, errors.New("upstream dial target did not match the test destination")
+		}
+		dialer := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+		return dialer.DialContext(ctx, network, address)
+	}
+	return s.safety.DialContext(ctx, network, address, target.Scheme, host, port)
 }
 
 func (s *Server) validateTarget(ctx context.Context, target *url.URL) error {

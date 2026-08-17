@@ -12,7 +12,7 @@ function normalizeWebsite(value: string): { url?: string; error?: string } {
   const candidate = value.trim();
   if (!candidate) return { error: "Enter a website address." };
 
-  const normalized = /^[a-z][a-zd+.-]*:///i.test(candidate)
+  const normalized = /^[a-z][a-z\d+.-]*:\/\//i.test(candidate)
     ? candidate
     : `https://${candidate}`;
 
@@ -86,11 +86,18 @@ function proxyAddress(value: string, engine: SearchEngine): { url?: string; erro
 
   if (isWebAddress(input)) {
     const normalized = normalizeWebsite(input);
-    if (!normalized.url) return normalized;
-    const target = new URL(normalized.url);
-    return {
-      url: `/browse/${encodeOrigin(target.origin)}${target.pathname}${target.search}${target.hash}`,
-    };
+    if (normalized.url) {
+      const target = new URL(normalized.url);
+      return {
+        url: `/browse/${encodeOrigin(target.origin)}${target.pathname}${target.search}${target.hash}`,
+      };
+    }
+    // Surface only an explicit non-http/https scheme error (e.g. ftp://).
+    // Everything else falls through to search instead of a validation error,
+    // so bare addresses are always completed automatically.
+    if (normalized.error && normalized.error.startsWith("OWU opens")) {
+      return normalized;
+    }
   }
 
   const searchTarget = new URL(engine.searchUrl(input));
