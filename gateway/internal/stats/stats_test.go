@@ -114,6 +114,34 @@ func TestRecorderDayRollover(t *testing.T) {
 	}
 }
 
+func TestConcurrentRecordAndSaveDoesNotRace(t *testing.T) {
+	dir := t.TempDir()
+	recorder, err := New(filepath.Join(dir, "stats.json"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer recorder.Close()
+
+	visitor := recorder.VisitorID("203.0.113.7:53000")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 2000; i++ {
+			recorder.Record(visitor, "example.com", true)
+			recorder.AddTraffic(1024)
+		}
+	}()
+	for i := 0; i < 2000; i++ {
+		if err := recorder.save(); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+	}
+	<-done
+	if err := recorder.save(); err != nil {
+		t.Fatalf("final save: %v", err)
+	}
+}
+
 func TestNormalizeSite(t *testing.T) {
 	cases := map[string]string{
 		"Example.COM":  "example.com",

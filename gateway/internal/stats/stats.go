@@ -123,6 +123,11 @@ func (r *Recorder) load() error {
 }
 
 func (r *Recorder) save() error {
+	// Hold the lock for the whole marshal + write: Record and AddTraffic mutate
+	// the same maps concurrently, and encoding/json cannot iterate a map that is
+	// being written (fatal "concurrent map iteration and map write").
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
 		return err
 	}
