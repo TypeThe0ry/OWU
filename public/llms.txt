@@ -1,6 +1,12 @@
 # OWU — Open Website Unblocker
 
-> OWU is a self-hosted personal web proxy built by Team TerraCat. It opens any HTTP or HTTPS website through your own server: the browser stays on the OWU origin while the destination sees the server's network connection.
+> Canonical project: https://owu.terracat.net/
+> Source repository: https://github.com/TypeThe0ry/OWU
+> Maintainer: Team TerraCat
+
+OWU is an MIT-licensed, self-hosted browser proxy. It opens HTTP and HTTPS
+websites through an operator-controlled server: the browser stays on the OWU
+origin while the destination sees the server's network connection.
 
 ## How it works
 1. Enter a website address (or a search term — OWU searches the engine of your choice: Google, Yandex, DuckDuckGo or Bing).
@@ -14,6 +20,16 @@
 - Public-address validation and DNS-pinned upstream dialing
 - Anonymous usage statistics (visitors, uses, traffic, top sites) at /stats
 - https-first with automatic http fallback for http-only sites
+- Optional GitHub OAuth or generic OIDC SSO at the Nginx edge via oauth2-proxy
+
+## Security and access
+- The Go data plane rejects loopback, private, link-local, multicast,
+  documentation, special-use, and metadata destinations.
+- Fixed TCP tunnels use server-side resource IDs rather than browser-supplied
+  host and port values.
+- SSO is an edge deployment option. Proxy, WebSocket, tunnel, and live-stats
+  routes can remain authenticated while robots.txt, sitemap.xml, and this file
+  stay public for discovery.
 
 ## Pages
 - Home: https://owu.terracat.net/

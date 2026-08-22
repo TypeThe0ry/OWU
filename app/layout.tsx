@@ -36,6 +36,8 @@ export const metadata: Metadata = {
   authors: [{ name: "Team TerraCat", url: "https://github.com/TypeThe0ry" }],
   creator: "Team TerraCat",
   publisher: "Team TerraCat",
+  category: "technology",
+  formatDetection: { email: false, address: false, telephone: false },
   robots: { index: true, follow: true, maxImagePreview: "large" },
   alternates: { canonical: "/" },
   manifest: "/manifest.webmanifest",
@@ -79,23 +81,62 @@ export const viewport: Viewport = {
   ],
 };
 
+const organizationLd = {
+  "@type": "Organization",
+  "@id": siteUrl + "/#organization",
+  name: "Team TerraCat",
+  url: "https://github.com/TypeThe0ry",
+  sameAs: ["https://github.com/TypeThe0ry/OWU"],
+};
+
+const softwareLd = {
+  "@type": "SoftwareSourceCode",
+  "@id": siteUrl + "/#software",
+  name: "Open Website Unblocker",
+  description:
+    "An MIT-licensed self-hosted browser proxy with a Vinext UI, Go data plane, WebSocket support, and fixed TCP tunnels.",
+  codeRepository: "https://github.com/TypeThe0ry/OWU",
+  programmingLanguage: ["TypeScript", "React", "Go", "Swift"],
+  runtimePlatform: ["Node.js", "Linux", "macOS"],
+  license: "https://opensource.org/license/mit",
+  isPartOf: { "@id": siteUrl + "/#website" },
+  creator: { "@id": siteUrl + "/#organization" },
+};
+
+const webApplicationLd = {
+  "@type": "WebApplication",
+  "@id": siteUrl + "/#application",
+  name: "OWU — Open Website Unblocker",
+  url: siteUrl + "/",
+  description:
+    "A self-hosted web proxy that opens HTTP and HTTPS websites through an operator-controlled server.",
+  applicationCategory: "NetworkApplication",
+  operatingSystem: "Any",
+  browserRequirements: "Requires a modern browser with JavaScript enabled",
+  softwareVersion: "0.1.0",
+  creator: { "@id": siteUrl + "/#organization" },
+  codeRepository: "https://github.com/TypeThe0ry/OWU",
+};
+
 const websiteLd = {
   "@context": "https://schema.org",
-  "@type": "WebSite",
-  "@id": siteUrl + "/#website",
-  url: siteUrl + "/",
-  name: "OWU — Open Website Unblocker",
-  alternateName: "OWU",
-  description:
-    "OWU is a self-hosted personal web proxy that opens any HTTP or HTTPS website through your own server.",
-  inLanguage: "en",
-  applicationCategory: "WebApplication",
-  operatingSystem: "Any",
-  publisher: {
-    "@type": "Organization",
-    name: "Team TerraCat",
-    url: "https://github.com/TypeThe0ry",
-  },
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "@id": siteUrl + "/#website",
+      url: siteUrl + "/",
+      name: "OWU — Open Website Unblocker",
+      alternateName: "OWU",
+      description:
+        "OWU is a self-hosted personal web proxy that opens HTTP or HTTPS websites through an operator-controlled server.",
+      inLanguage: "en",
+      publisher: { "@id": siteUrl + "/#organization" },
+      about: { "@id": siteUrl + "/#application" },
+    },
+    organizationLd,
+    softwareLd,
+    webApplicationLd,
+  ],
 };
 
 const themeInitScript = "try{const saved=localStorage.getItem('owu-theme');const theme=saved==='light'||saved==='dark'?saved:(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=theme}catch{}";

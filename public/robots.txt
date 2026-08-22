@@ -1,44 +1,13 @@
 User-agent: *
 Allow: /
+Disallow: /browse/
+Disallow: /socket/
+Disallow: /tunnel/
+Disallow: /stats
+Disallow: /_next/data/
 
-# Generative engines and AI assistants (GEO)
-User-agent: GPTBot
-Allow: /
-
-User-agent: ChatGPT-User
-Allow: /
-
-User-agent: OAI-SearchBot
-Allow: /
-
-User-agent: ClaudeBot
-Allow: /
-
-User-agent: Claude-Web
-Allow: /
-
-User-agent: PerplexityBot
-Allow: /
-
-User-agent: Google-Extended
-Allow: /
-
-User-agent: anthropic-ai
-Allow: /
-
-User-agent: cohere-ai
-Allow: /
-
-User-agent: Bytespider
-Allow: /
-
-User-agent: CCBot
-Allow: /
-
-User-agent: Applebot-Extended
-Allow: /
-
-User-agent: meta-externalagent
-Allow: /
+# The wildcard group also covers search and generative-engine crawlers. Keep
+# one group so the same route policy applies to GPTBot, Claude, Perplexity,
+# Google-Extended, and ordinary search crawlers.
 
 Sitemap: https://owu.terracat.net/sitemap.xml

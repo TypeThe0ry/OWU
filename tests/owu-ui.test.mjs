@@ -26,10 +26,10 @@ test("accepts only browser-safe HTTP and HTTPS addresses", async () => {
 
 test("ships liquid glass and explicit light and dark themes", async () => {
   const css = await readFile(new URL("app/globals.css", root), "utf8");
-  const page = await readFile(new URL("app/page.tsx", root), "utf8");
+  const themeToggle = await readFile(new URL("app/theme-toggle.tsx", root), "utf8");
   assert.match(css, /backdrop-filter:\s*blur/);
   assert.match(css, /:root\[data-theme="dark"\]/);
   assert.match(css, /prefers-reduced-motion/);
-  assert.match(page, /localStorage\.setItem\("owu-theme"/);
-  assert.match(page, /aria-label="Toggle color theme"/);
+  assert.match(themeToggle, /localStorage\.setItem\("owu-theme"/);
+  assert.match(themeToggle, /aria-label="Toggle color theme"/);
 });

@@ -65,6 +65,14 @@ const (
 	manifestCacheMaxAge      = 60 * time.Second
 )
 
+// These destinations must be opened by the visitor's browser rather than
+// proxied through OWU. Keep this list in sync with app/page.tsx.
+var directRedirectHosts = map[string]struct{}{
+	"github.com":        {},
+	"web.archive.org":   {},
+	"auth.wikimedia.org": {},
+}
+
 type Config struct {
 	ListenAddr        string
 	DemoAllowedOrigin string
@@ -178,7 +186,9 @@ func safePolicy(demoOrigin string) safety.Policy {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if s.stats == nil {
+	// A direct redirect has no upstream traffic. Do not add the redirect
+	// response itself to the aggregate traffic counter either.
+	if s.stats == nil || requestTargetsDirectHost(r) {
 		s.serveHTTP(w, r)
 		return
 	}
@@ -258,6 +268,10 @@ func (s *Server) handleRefererFallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := &url.URL{Scheme: base.Scheme, Host: base.Host, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
+	if redirect, ok := directRedirectURL(target); ok {
+		http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
+		return
+	}
 	// Canonicalize root-relative navigations and module/resource requests back
 	// under /browse/{origin}. Keeping the proxy token in the visible URL makes
 	// subsequent relative requests deterministic even after JS location changes.
@@ -267,6 +281,10 @@ func (s *Server) handleRefererFallback(w http.ResponseWriter, r *http.Request) {
 func (s *Server) proxyHTTP(w http.ResponseWriter, r *http.Request, target *url.URL, token string) {
 	if r.ContentLength > maxRequestBodyBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, "The request body is too large.")
+		return
+	}
+	if redirect, ok := directRedirectURL(target); ok {
+		http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
 		return
 	}
 	// Bound connection establishment and response headers, but do not impose a
@@ -380,6 +398,10 @@ func (s *Server) handleSocket(w http.ResponseWriter, r *http.Request) {
 		mapped.Scheme = "http"
 	} else {
 		mapped.Scheme = "https"
+	}
+	if redirect, ok := directRedirectURL(&mapped); ok {
+		http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
+		return
 	}
 	if err := s.validateTarget(r.Context(), &mapped); err != nil {
 		writeError(w, http.StatusForbidden, "This destination is not a public Internet address.")
@@ -738,6 +760,49 @@ func parseVirtualTarget(requestURL *url.URL) (*url.URL, string, bool) {
 	return nil, "", false
 }
 
+// directRedirectURL returns the real destination URL for a host that should
+// bypass OWU. The hostname match is exact; unrelated subdomains remain
+// proxied. HTTPS is used for the direct browser navigation and the original
+// path/query are preserved.
+func directRedirectURL(target *url.URL) (string, bool) {
+	if target == nil || !isDirectRedirectHost(target.Hostname()) {
+		return "", false
+	}
+	redirect := *target
+	redirect.Scheme = "https"
+	return redirect.String(), true
+}
+
+func isDirectRedirectHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	_, ok := directRedirectHosts[host]
+	return ok
+}
+
+// requestTargetsDirectHost mirrors the route parsing used by ServeHTTP so
+// direct-redirect requests are excluded from anonymous traffic accounting
+// before the response writer is wrapped.
+func requestTargetsDirectHost(r *http.Request) bool {
+	if r == nil || r.URL == nil {
+		return false
+	}
+	if target, _, ok := parseVirtualTarget(r.URL); ok {
+		return isDirectRedirectHost(target.Hostname())
+	}
+	if strings.HasPrefix(r.URL.Path, browsePrefix) {
+		target, _, err := parseProxyTarget(r.URL, browsePrefix, map[string]bool{"http": true, "https": true})
+		return err == nil && isDirectRedirectHost(target.Hostname())
+	}
+	if strings.HasPrefix(r.URL.Path, socketPrefix) {
+		target, _, err := parseProxyTarget(r.URL, socketPrefix, map[string]bool{"ws": true, "wss": true})
+		return err == nil && isDirectRedirectHost(target.Hostname())
+	}
+	if target, ok := proxiedRefererTarget(r.Referer()); ok {
+		return isDirectRedirectHost(target.Hostname())
+	}
+	return false
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -759,7 +824,7 @@ func (s *Server) Close() {
 // recordUse marks anonymous activity. Subresource requests still identify an
 // active visitor but do not inflate the usage totals or the site ranking.
 func (s *Server) recordUse(r *http.Request, site, path string) {
-	if s.stats == nil {
+	if s.stats == nil || isDirectRedirectHost(site) {
 		return
 	}
 	s.stats.Record(s.stats.VisitorID(clientAddress(r)), stats.NormalizeSite(site), !hasMediaExtension(path))

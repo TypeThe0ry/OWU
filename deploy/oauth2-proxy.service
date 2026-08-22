@@ -1,0 +1,26 @@
+[Unit]
+Description=OWU OAuth2/OIDC single sign-on edge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www
+Group=www
+EnvironmentFile=/etc/owu/oauth2-proxy.env
+ExecStart=/usr/local/bin/oauth2-proxy
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

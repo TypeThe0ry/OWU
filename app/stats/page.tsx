@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import ThemeToggle from "../theme-toggle";
 
 interface TopSite {
@@ -84,10 +85,10 @@ export default function StatsPage() {
         </div>
 
         <div className="topbar-actions">
-          <a className="stats-link stats-link-back" href="/" aria-label="Back to home">
+          <Link className="stats-link stats-link-back" href="/" aria-label="Back to home">
             <i aria-hidden="true">←</i>
             <span>Home</span>
-          </a>
+          </Link>
           <ThemeToggle />
         </div>
       </header>

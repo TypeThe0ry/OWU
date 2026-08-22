@@ -101,6 +101,38 @@ func TestVirtualDocumentRoutePreservesRawTargetQueryAndReferer(t *testing.T) {
 	}
 }
 
+func TestDirectRedirectTargetsBypassUpstream(t *testing.T) {
+	server := New(Config{})
+	target, err := url.Parse("http://github.com/org/repo?tab=readme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, browsePrefix+encodeOrigin(target)+"/org/repo?tab=readme", nil)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want 307", recorder.Code)
+	}
+	if got, want := recorder.Header().Get("Location"), "https://github.com/org/repo?tab=readme"; got != want {
+		t.Fatalf("Location = %q, want %q", got, want)
+	}
+}
+
+func TestDirectRedirectHostMatchIsExact(t *testing.T) {
+	for _, host := range []string{"github.com", "web.archive.org", "auth.wikimedia.org", "GITHUB.COM."} {
+		if !isDirectRedirectHost(host) {
+			t.Fatalf("isDirectRedirectHost(%q) = false", host)
+		}
+	}
+	for _, host := range []string{"www.github.com", "raw.githubusercontent.com", "wikimedia.org"} {
+		if isDirectRedirectHost(host) {
+			t.Fatalf("isDirectRedirectHost(%q) = true", host)
+		}
+	}
+}
+
 func TestVirtualRefererFallbackReturnsCanonicalBrowseRoute(t *testing.T) {
 	server := New(Config{})
 	target, _ := url.Parse("https://example.com/")

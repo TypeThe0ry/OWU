@@ -8,6 +8,15 @@ interface TopSite {
   uses: number;
 }
 
+// These destinations are intentionally opened by the user's browser instead
+// of consuming OWU proxy bandwidth. Keep the list in sync with the Go data
+// plane's direct redirect policy.
+const DIRECT_REDIRECT_HOSTS = new Set([
+  "github.com",
+  "web.archive.org",
+  "auth.wikimedia.org",
+]);
+
 function normalizeWebsite(value: string): { url?: string; error?: string } {
   const candidate = value.trim();
   if (!candidate) return { error: "Enter a website address." };
@@ -29,6 +38,17 @@ function normalizeWebsite(value: string): { url?: string; error?: string } {
   } catch {
     return { error: "Enter a valid address, such as https://example.com." };
   }
+}
+
+function directWebsiteUrl(url: URL): string | undefined {
+  if (!DIRECT_REDIRECT_HOSTS.has(url.hostname.toLowerCase().replace(/\.$/, ""))) {
+    return undefined;
+  }
+
+  // Use HTTPS for the direct browser navigation. Preserve the path and query
+  // so a pasted deep link lands on the same real page.
+  url.protocol = "https:";
+  return url.href;
 }
 
 function encodeOrigin(origin: string): string {
@@ -88,6 +108,10 @@ function proxyAddress(value: string, engine: SearchEngine): { url?: string; erro
     const normalized = normalizeWebsite(input);
     if (normalized.url) {
       const target = new URL(normalized.url);
+      const direct = directWebsiteUrl(target);
+      if (direct) {
+        return { url: direct };
+      }
       return {
         url: `/browse/${encodeOrigin(target.origin)}${target.pathname}${target.search}${target.hash}`,
       };
@@ -117,7 +141,8 @@ export default function Home() {
   useEffect(() => {
     const saved = window.localStorage.getItem("owu-engine");
     if (saved && SEARCH_ENGINES.some((candidate) => candidate.id === saved)) {
-      setEngineId(saved);
+      const timer = window.setTimeout(() => setEngineId(saved), 0);
+      return () => window.clearTimeout(timer);
     }
   }, []);
 
@@ -281,7 +306,11 @@ export default function Home() {
       </button>
 
       {settingsOpen && (
+        /* The backdrop deliberately owns click-to-dismiss behavior while the
+           nested dialog stops propagation. */
+        /* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */
         <div className="settings-backdrop" onClick={() => setSettingsOpen(false)}>
+          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/click-events-have-key-events */}
           <div
             className="settings-panel"
             role="dialog"

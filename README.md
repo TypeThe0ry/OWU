@@ -1,9 +1,11 @@
 # Open Website Unblocker (OWU)
 
-OWU is a self-hosted personal web proxy with one deliberately simple browser
+OWU is an MIT-licensed self-hosted web proxy with a deliberately simple browser
 flow: enter an HTTP or HTTPS address and open it through your server. The
 browser remains on the OWU origin, while the destination sees the server's
-network connection rather than the device's address.
+network connection rather than the device's address. The repository includes a
+Vinext/React UI, a Go data plane, an optional macOS client, GitHub/OIDC SSO
+deployment templates, and crawler-friendly GEO metadata.
 
 OWU also includes a macOS 14+ client for operator-defined TCP resources. It can
 publish loopback-only local endpoints for services such as SSH and Minecraft
@@ -67,6 +69,18 @@ exact server-side destinations.
 | `deploy/` | Nginx, systemd, and environment templates |
 | `demo-target/`, `compose.yaml` | Earlier controlled gateway integration fixture |
 | `tests/` | Web UI and integration checks |
+
+## SSO and GEO at a glance
+
+- **SSO:** optional GitHub OAuth or generic OIDC through `oauth2-proxy` and
+  Nginx `auth_request`; credentials stay outside the repository and the Go
+  proxy never receives provider tokens.
+- **GEO:** canonical metadata, JSON-LD for OWU/Team TerraCat/source code,
+  `robots.txt`, a minimal sitemap, and `llms.txt` keep project facts clear to
+  search engines and generative assistants without exposing encoded target
+  routes to crawlers.
+- **Runbook:** see [`docs/SSO-GEO.md`](docs/SSO-GEO.md) for enablement and
+  verification.
 
 ## Requirements
 
